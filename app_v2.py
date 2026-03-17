@@ -7,6 +7,7 @@ app_v2.py — PXK Manager (All-in-One)
 
 Quy tắc ghép:
  - Dùng PXK nhỏ nhất trước (ngày cũ nhất trước)
+ - Lọc theo D/O No (Số hóa đơn) trước khi subset-sum
  - Iterative constraint propagation (subset-sum)
  - Đánh dấu PXK cuối cùng được sử dụng (cột 20)
 """
@@ -96,6 +97,25 @@ def pxk_sort_key(p):
     except: return 0
 
 
+def norm_do_no(s):
+    """'0093/0094' → {'93','94'} ;  '0096' → {'96'}"""
+    parts = re.split(r'[/\s]+', str(s).strip())
+    res = set()
+    for p in parts:
+        p = p.strip()
+        if p.isdigit():
+            res.add(str(int(p)))
+    return res
+
+
+def norm_invoice(s):
+    """'00096/1C26TAA001' → '96'"""
+    if not s:
+        return None
+    m = re.match(r'^(\d+)', str(s).strip())
+    return str(int(m.group(1))) if m else None
+
+
 def subset_sum_solutions(values, target, max_sols=10):
     t  = round(target * 100)
     iv = [round(v * 100) for v in values]
@@ -116,8 +136,10 @@ def subset_sum_solutions(values, target, max_sols=10):
 
 @st.cache_data(show_spinner=False)
 def extract_pdfs(file_bytes_list):
+    """Returns (pxk_totals, pxk_dates, pxk_do_no, errors)"""
     pxk_totals = defaultdict(lambda: defaultdict(float))
     pxk_dates  = {}
+    pxk_do_no  = {}   # pxk -> set of normalized D/O No strings
     errors     = []
     with tempfile.TemporaryDirectory() as tmpdir:
         for fname, fbytes in file_bytes_list:
@@ -133,18 +155,26 @@ def extract_pdfs(file_bytes_list):
             ngay = res.get("ngay", "")
             if ngay and pxk not in pxk_dates:
                 pxk_dates[pxk] = str(ngay)
+            do_raw = res.get("do_no", "")
+            if do_raw:
+                pxk_do_no[pxk] = norm_do_no(do_raw)
             for item in res.get("items", []):
                 pxk_totals[pxk][item["ma_hang"]] += item["so_luong"]
-    return dict(pxk_totals), pxk_dates, errors
+    return dict(pxk_totals), pxk_dates, pxk_do_no, errors
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 2 — MATCHING
+# STEP 2 — MATCHING (with D/O No constraint)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def match_pxk(form_rows, pxk_totals):
-    all_pxks  = sorted(pxk_totals.keys(), key=pxk_sort_key)
-    n         = len(form_rows)
+def match_pxk(form_rows, pxk_totals, pxk_do_no):
+    """
+    Ghép số PXK với D/O No constraint:
+    - Với mỗi PXK, chỉ xét các dòng form có cùng D/O No (Số hóa đơn)
+    - Fallback về tất cả dòng nếu không khớp D/O No
+    """
+    all_pxks = sorted(pxk_totals.keys(), key=pxk_sort_key)
+    n = len(form_rows)
     assigned  = [False] * n
     result    = [None]  * n
     status    = ["no_match"] * n
@@ -153,14 +183,23 @@ def match_pxk(form_rows, pxk_totals):
     for fr in form_rows:
         mh_to_idxs[fr["ma_hang"]].append(fr["idx"])
 
+    def get_free(mh, pxk_dos):
+        """Get unassigned indices for mh, filtered by D/O No if available."""
+        all_free = [i for i in mh_to_idxs[mh] if not assigned[i]]
+        if pxk_dos:
+            filtered = [i for i in all_free if form_rows[i].get("inv") in pxk_dos]
+            return filtered if filtered else all_free  # fallback if no match
+        return all_free
+
     # Phase 1: iterative propagation
     unresolved = set(all_pxks)
     for _ in range(50):
         done = 0
         for pxk in sorted(unresolved, key=pxk_sort_key):
+            pxk_dos = pxk_do_no.get(pxk, set())
             plan, ok, unique = {}, True, True
             for mh, target in pxk_totals[pxk].items():
-                free = [i for i in mh_to_idxs[mh] if not assigned[i]]
+                free = get_free(mh, pxk_dos)
                 sols = subset_sum_solutions([form_rows[i]["sl"] for i in free], target, 2)
                 if not sols: ok=False; break
                 if len(sols)>1: unique=False; break
@@ -172,12 +211,13 @@ def match_pxk(form_rows, pxk_totals):
                 unresolved.discard(pxk); done+=1
         if done==0: break
 
-    # Phase 2: collect candidates
+    # Phase 2: collect candidates for remaining
     pxk_cands = {}
     for pxk in sorted(unresolved, key=pxk_sort_key):
+        pxk_dos = pxk_do_no.get(pxk, set())
         plan, ok = {}, True
         for mh, target in pxk_totals[pxk].items():
-            free = [i for i in mh_to_idxs[mh] if not assigned[i]]
+            free = get_free(mh, pxk_dos)
             sols = subset_sum_solutions([form_rows[i]["sl"] for i in free], target, 10)
             if not sols: ok=False; break
             plan[mh] = [free[j] for j in sols[0]]
@@ -272,8 +312,11 @@ if run_btn or st.session_state.get("processed"):
         with st.status("⏳ Đang xử lý...", expanded=True) as sb:
             fbl = [(f.name, f.read()) for f in pdf_files]
             st.write(f"📄 Đang trích xuất {len(fbl)} file PDF...")
-            pxk_totals, pxk_dates, pdf_errors = extract_pdfs(fbl)
-            st.write(f"✅ {len(pxk_totals)} PXK" + (f" | ⚠️ {len(pdf_errors)} lỗi" if pdf_errors else ""))
+            pxk_totals, pxk_dates, pxk_do_no, pdf_errors = extract_pdfs(fbl)
+            do_covered = sum(1 for p in pxk_totals if p in pxk_do_no)
+            st.write(f"✅ {len(pxk_totals)} PXK "
+                     f"({do_covered} có D/O No)"
+                     + (f" | ⚠️ {len(pdf_errors)} lỗi" if pdf_errors else ""))
 
             st.write("📊 Đang đọc FORM CHƯA NHẬP...")
             form_bytes = form_file.read()
@@ -283,13 +326,15 @@ if run_btn or st.session_state.get("processed"):
             form_rows = []
             for r in range(2, ws_in.max_row+1):
                 if ws_in.cell(r,2).value is None: continue
-                mh = str(ws_in.cell(r,4).value or "").strip()
-                sl = float(ws_in.cell(r,5).value or 0)
-                if mh: form_rows.append({"row":r,"idx":len(form_rows),"ma_hang":mh,"sl":sl})
+                mh  = str(ws_in.cell(r,4).value or "").strip()
+                sl  = float(ws_in.cell(r,5).value or 0)
+                inv_raw = ws_in.cell(r,3).value
+                inv = norm_invoice(str(inv_raw).strip()) if inv_raw else None
+                if mh: form_rows.append({"row":r,"idx":len(form_rows),"ma_hang":mh,"sl":sl,"inv":inv})
             st.write(f"✅ {len(form_rows)} dòng dữ liệu")
 
-            st.write("🔄 Đang ghép số PXK...")
-            res, stl, np_ = match_pxk(form_rows, pxk_totals)
+            st.write("🔄 Đang ghép số PXK (D/O No + subset-sum)...")
+            res, stl, np_ = match_pxk(form_rows, pxk_totals, pxk_do_no)
             na = sum(1 for s in stl if s=="auto")
             nb = sum(1 for s in stl if s=="ambiguous")
             nn = sum(1 for s in stl if s=="no_match")
@@ -299,7 +344,7 @@ if run_btn or st.session_state.get("processed"):
             out_bytes = build_output_excel(form_bytes, form_rows, res, stl, np_, pxk_dates)
 
             st.session_state["results_cache"] = dict(
-                pxk_totals=pxk_totals, pxk_dates=pxk_dates,
+                pxk_totals=pxk_totals, pxk_dates=pxk_dates, pxk_do_no=pxk_do_no,
                 form_rows=form_rows, result=res, status_list=stl,
                 note_pxks=np_, output_bytes=out_bytes, pdf_errors=pdf_errors,
             )
@@ -308,9 +353,10 @@ if run_btn or st.session_state.get("processed"):
 
     cache = st.session_state["results_cache"]
     pxk_totals   = cache["pxk_totals"];  pxk_dates  = cache["pxk_dates"]
-    form_rows    = cache["form_rows"];    result     = cache["result"]
-    status_list  = cache["status_list"]; note_pxks  = cache["note_pxks"]
-    output_bytes = cache["output_bytes"]; pdf_errors = cache["pdf_errors"]
+    pxk_do_no    = cache["pxk_do_no"];   form_rows  = cache["form_rows"]
+    result       = cache["result"];       status_list= cache["status_list"]
+    note_pxks    = cache["note_pxks"];   output_bytes=cache["output_bytes"]
+    pdf_errors   = cache["pdf_errors"]
 
     n_auto = sum(1 for s in status_list if s=="auto")
     n_amb  = sum(1 for s in status_list if s=="ambiguous")
