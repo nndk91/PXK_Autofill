@@ -5,10 +5,12 @@ app_v2.py — PXK Manager (All-in-One)
 2. Upload FORM CHƯA NHẬP      →  tự động ghép số PXK
 3. Tải về file Excel kết quả  (xanh ✅ / vàng 🔍 / đỏ ❌)
 
-Quy tắc ghép:
- - Dùng PXK nhỏ nhất trước (ngày cũ nhất trước)
- - Lọc theo D/O No (Số hóa đơn) trước khi subset-sum
- - Iterative constraint propagation (subset-sum)
+Quy tắc ghép (3 pha):
+ Phase 0 — Invoice-consecutive greedy (cân bằng tổng):
+   Với mỗi hoá đơn, nếu tổng PXK targets == tổng dòng form → gán tuần tự
+   theo thứ tự PXK tăng dần. Chỉ commit khi toàn bộ invoice hợp lệ.
+ Phase 1 — Iterative subset-sum (unique solution only)
+ Phase 2 — Ambiguous fallback (first candidate)
  - Đánh dấu PXK cuối cùng được sử dụng (cột 20)
 """
 
@@ -169,9 +171,13 @@ def extract_pdfs(file_bytes_list):
 
 def match_pxk(form_rows, pxk_totals, pxk_do_no):
     """
-    Ghép số PXK với D/O No constraint:
-    - Với mỗi PXK, chỉ xét các dòng form có cùng D/O No (Số hóa đơn)
-    - Fallback về tất cả dòng nếu không khớp D/O No
+    Ghép số PXK với 3 pha:
+    Phase 0 — Invoice-consecutive greedy (chỉ khi tổng cân bằng):
+        Với mỗi hoá đơn, kiểm tra tổng target của các PXK == tổng SL các dòng.
+        Nếu cân bằng → gán tuần tự theo thứ tự PXK tăng dần.
+        Chỉ confirm nếu tất cả PXK trong invoice đều khớp.
+    Phase 1 — Iterative subset-sum (unique solution only)
+    Phase 2 — Ambiguous fallback (first candidate)
     """
     all_pxks = sorted(pxk_totals.keys(), key=pxk_sort_key)
     n = len(form_rows)
@@ -179,20 +185,105 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
     result    = [None]  * n
     status    = ["no_match"] * n
     note_pxks = [[] for _ in range(n)]
-    mh_to_idxs = defaultdict(list)
+
+    # Build lookup tables
+    mh_to_idxs     = defaultdict(list)
+    inv_mh_to_idxs = defaultdict(list)   # (invoice, mh) → [idx]
     for fr in form_rows:
         mh_to_idxs[fr["ma_hang"]].append(fr["idx"])
+        if fr.get("inv"):
+            inv_mh_to_idxs[(fr["inv"], fr["ma_hang"])].append(fr["idx"])
+
+    # Build invoice → eligible PXKs mapping
+    inv_to_pxks = defaultdict(list)
+    for pxk in all_pxks:
+        for d in pxk_do_no.get(pxk, set()):
+            inv_to_pxks[d].append(pxk)
 
     def get_free(mh, pxk_dos):
-        """Get unassigned indices for mh, filtered by D/O No if available."""
+        """Unassigned indices for mh, filtered by D/O No if available."""
         all_free = [i for i in mh_to_idxs[mh] if not assigned[i]]
         if pxk_dos:
             filtered = [i for i in all_free if form_rows[i].get("inv") in pxk_dos]
-            return filtered if filtered else all_free  # fallback if no match
+            return filtered if filtered else all_free
         return all_free
 
-    # Phase 1: iterative propagation
-    unresolved = set(all_pxks)
+    # ── Phase 0: Invoice-consecutive greedy ────────────────────────────────────
+    # Only assign when sum(PXK targets for invoice×mh) == sum(form rows for invoice×mh)
+    resolved_p0 = set()
+    for inv in sorted(inv_to_pxks.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+        pxks_for_inv = [p for p in sorted(inv_to_pxks[inv], key=pxk_sort_key)
+                        if p not in resolved_p0]
+        if not pxks_for_inv:
+            continue
+
+        # Collect all mh needed by these PXKs
+        mh_set = set()
+        for pxk in pxks_for_inv:
+            mh_set.update(pxk_totals[pxk].keys())
+
+        # Balance check: sum of targets == sum of free rows for each (inv, mh)
+        balanced = True
+        for mh in mh_set:
+            total_target = sum(
+                pxk_totals[pxk].get(mh, 0) for pxk in pxks_for_inv
+            )
+            total_rows = sum(
+                form_rows[i]["sl"]
+                for i in inv_mh_to_idxs.get((inv, mh), [])
+                if not assigned[i]
+            )
+            if abs(round(total_target * 100) - round(total_rows * 100)) > 1:
+                balanced = False
+                break
+        if not balanced:
+            continue
+
+        # Greedy assignment pass — track tentative assignments separately
+        inv_plan    = {}   # pxk → {mh: [idx]}
+        tentative   = set()
+        greedy_ok   = True
+
+        for pxk in pxks_for_inv:
+            pxk_plan = {}
+            pxk_ok   = True
+            for mh, target in pxk_totals[pxk].items():
+                free = [
+                    i for i in inv_mh_to_idxs.get((inv, mh), [])
+                    if not assigned[i] and i not in tentative
+                ]
+                acc   = 0.0
+                batch = []
+                for i in free:
+                    sl = form_rows[i]["sl"]
+                    if round((acc + sl) * 100) <= round(target * 100):
+                        acc += sl
+                        batch.append(i)
+                        if abs(round(acc * 100) - round(target * 100)) < 1:
+                            break
+                if abs(round(acc * 100) - round(target * 100)) > 1:
+                    pxk_ok = False
+                    break
+                pxk_plan[mh] = batch
+            if not pxk_ok:
+                greedy_ok = False
+                break
+            inv_plan[pxk] = pxk_plan
+            for batch in pxk_plan.values():
+                tentative.update(batch)
+
+        # Commit only when entire invoice plan succeeded
+        if greedy_ok:
+            for pxk, pxk_plan in inv_plan.items():
+                for batch in pxk_plan.values():
+                    for i in batch:
+                        assigned[i] = True
+                        result[i]   = pxk
+                        status[i]   = "auto"
+                resolved_p0.add(pxk)
+
+    # ── Phase 1: iterative subset-sum propagation ──────────────────────────────
+    unresolved = set(all_pxks) - resolved_p0
     for _ in range(50):
         done = 0
         for pxk in sorted(unresolved, key=pxk_sort_key):
@@ -201,17 +292,18 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
             for mh, target in pxk_totals[pxk].items():
                 free = get_free(mh, pxk_dos)
                 sols = subset_sum_solutions([form_rows[i]["sl"] for i in free], target, 2)
-                if not sols: ok=False; break
-                if len(sols)>1: unique=False; break
+                if not sols: ok = False; break
+                if len(sols) > 1: unique = False; break
                 plan[mh] = [free[j] for j in sols[0]]
             if ok and unique:
                 for idxs in plan.values():
                     for i in idxs:
-                        assigned[i]=True; result[i]=pxk; status[i]="auto"
-                unresolved.discard(pxk); done+=1
-        if done==0: break
+                        assigned[i] = True; result[i] = pxk; status[i] = "auto"
+                unresolved.discard(pxk); done += 1
+        if done == 0:
+            break
 
-    # Phase 2: collect candidates for remaining
+    # ── Phase 2: ambiguous fallback ────────────────────────────────────────────
     pxk_cands = {}
     for pxk in sorted(unresolved, key=pxk_sort_key):
         pxk_dos = pxk_do_no.get(pxk, set())
@@ -219,20 +311,22 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
         for mh, target in pxk_totals[pxk].items():
             free = get_free(mh, pxk_dos)
             sols = subset_sum_solutions([form_rows[i]["sl"] for i in free], target, 10)
-            if not sols: ok=False; break
+            if not sols: ok = False; break
             plan[mh] = [free[j] for j in sols[0]]
-        if ok: pxk_cands[pxk] = plan
+        if ok:
+            pxk_cands[pxk] = plan
 
     for pxk, plan in pxk_cands.items():
         for idxs in plan.values():
             for i in idxs:
-                if pxk not in note_pxks[i]: note_pxks[i].append(pxk)
+                if pxk not in note_pxks[i]:
+                    note_pxks[i].append(pxk)
 
     for pxk in sorted(pxk_cands.keys(), key=pxk_sort_key):
         for idxs in pxk_cands[pxk].values():
             for i in idxs:
                 if not assigned[i]:
-                    assigned[i]=True; result[i]=pxk; status[i]="ambiguous"
+                    assigned[i] = True; result[i] = pxk; status[i] = "ambiguous"
 
     return result, status, note_pxks
 
@@ -333,7 +427,7 @@ if run_btn or st.session_state.get("processed"):
                 if mh: form_rows.append({"row":r,"idx":len(form_rows),"ma_hang":mh,"sl":sl,"inv":inv})
             st.write(f"✅ {len(form_rows)} dòng dữ liệu")
 
-            st.write("🔄 Đang ghép số PXK (D/O No + subset-sum)...")
+            st.write("🔄 Đang ghép số PXK (Phase 0: greedy → Phase 1: subset-sum → Phase 2: fallback)...")
             res, stl, np_ = match_pxk(form_rows, pxk_totals, pxk_do_no)
             na = sum(1 for s in stl if s=="auto")
             nb = sum(1 for s in stl if s=="ambiguous")
