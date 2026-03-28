@@ -171,13 +171,13 @@ def extract_pdfs(file_bytes_list):
 
 def match_pxk(form_rows, pxk_totals, pxk_do_no):
     """
-    Ghép số PXK với 3 pha:
+    Ghép số PXK với 4 pha:
     Phase 0 — Invoice-consecutive greedy (chỉ khi tổng cân bằng):
         Với mỗi hoá đơn, kiểm tra tổng target của các PXK == tổng SL các dòng.
         Nếu cân bằng → gán tuần tự theo thứ tự PXK tăng dần.
-        Chỉ confirm nếu tất cả PXK trong invoice đều khớp.
-    Phase 1 — Iterative subset-sum (unique solution only)
-    Phase 2 — Ambiguous fallback (first candidate)
+    Phase 1 — Multi-PXK subset-sum (NEW): Tìm tổ hợp nhiều PXK cho cùng mã hàng
+    Phase 2 — Iterative subset-sum (unique solution only)
+    Phase 3 — Ambiguous fallback (first candidate)
     """
     all_pxks = sorted(pxk_totals.keys(), key=pxk_sort_key)
     n = len(form_rows)
@@ -185,14 +185,18 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
     result    = [None]  * n
     status    = ["no_match"] * n
     note_pxks = [[] for _ in range(n)]
+    split_info = [[] for _ in range(n)]  # NEW: track multiple PXKs per row
 
     # Build lookup tables
     mh_to_idxs     = defaultdict(list)
-    inv_mh_to_idxs = defaultdict(list)   # (invoice, mh) → [idx]
+    inv_mh_to_idxs = defaultdict(list)
+    inv_to_total_sl = defaultdict(float)  # (inv, mh) -> total quantity in form
+
     for fr in form_rows:
         mh_to_idxs[fr["ma_hang"]].append(fr["idx"])
         if fr.get("inv"):
             inv_mh_to_idxs[(fr["inv"], fr["ma_hang"])].append(fr["idx"])
+            inv_to_total_sl[(fr["inv"], fr["ma_hang"])] += fr["sl"]
 
     # Build invoice → eligible PXKs mapping
     inv_to_pxks = defaultdict(list)
@@ -209,7 +213,6 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
         return all_free
 
     # ── Phase 0: Invoice-consecutive greedy ────────────────────────────────────
-    # Only assign when sum(PXK targets for invoice×mh) == sum(form rows for invoice×mh)
     resolved_p0 = set()
     for inv in sorted(inv_to_pxks.keys(), key=lambda x: int(x) if x.isdigit() else 0):
         pxks_for_inv = [p for p in sorted(inv_to_pxks[inv], key=pxk_sort_key)
@@ -217,42 +220,32 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
         if not pxks_for_inv:
             continue
 
-        # Collect all mh needed by these PXKs
         mh_set = set()
         for pxk in pxks_for_inv:
             mh_set.update(pxk_totals[pxk].keys())
 
-        # Balance check: sum of targets == sum of free rows for each (inv, mh)
         balanced = True
         for mh in mh_set:
-            total_target = sum(
-                pxk_totals[pxk].get(mh, 0) for pxk in pxks_for_inv
-            )
-            total_rows = sum(
-                form_rows[i]["sl"]
-                for i in inv_mh_to_idxs.get((inv, mh), [])
-                if not assigned[i]
-            )
+            total_target = sum(pxk_totals[pxk].get(mh, 0) for pxk in pxks_for_inv)
+            total_rows = sum(form_rows[i]["sl"] for i in inv_mh_to_idxs.get((inv, mh), [])
+                           if not assigned[i])
             if abs(round(total_target * 100) - round(total_rows * 100)) > 1:
                 balanced = False
                 break
         if not balanced:
             continue
 
-        # Greedy assignment pass — track tentative assignments separately
-        inv_plan    = {}   # pxk → {mh: [idx]}
-        tentative   = set()
-        greedy_ok   = True
+        inv_plan = {}
+        tentative = set()
+        greedy_ok = True
 
         for pxk in pxks_for_inv:
             pxk_plan = {}
-            pxk_ok   = True
+            pxk_ok = True
             for mh, target in pxk_totals[pxk].items():
-                free = [
-                    i for i in inv_mh_to_idxs.get((inv, mh), [])
-                    if not assigned[i] and i not in tentative
-                ]
-                acc   = 0.0
+                free = [i for i in inv_mh_to_idxs.get((inv, mh), [])
+                       if not assigned[i] and i not in tentative]
+                acc = 0.0
                 batch = []
                 for i in free:
                     sl = form_rows[i]["sl"]
@@ -272,18 +265,104 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
             for batch in pxk_plan.values():
                 tentative.update(batch)
 
-        # Commit only when entire invoice plan succeeded
         if greedy_ok:
             for pxk, pxk_plan in inv_plan.items():
                 for batch in pxk_plan.values():
                     for i in batch:
                         assigned[i] = True
-                        result[i]   = pxk
-                        status[i]   = "auto"
+                        result[i] = pxk
+                        status[i] = "auto"
                 resolved_p0.add(pxk)
 
-    # ── Phase 1: iterative subset-sum propagation ──────────────────────────────
+    # ── Phase 1: Multi-PXK subset-sum (NEW) ──────────────────────────────────────
+    # For each (invoice, item code), find combination of PXKs that sum to form total
     unresolved = set(all_pxks) - resolved_p0
+
+    for inv in sorted(inv_to_pxks.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+        pxks_for_inv = [p for p in sorted(inv_to_pxks[inv], key=pxk_sort_key)
+                       if p in unresolved]
+        if not pxks_for_inv:
+            continue
+
+        # Group PXKs by item code available
+        mh_to_pxks = defaultdict(list)
+        for pxk in pxks_for_inv:
+            for mh in pxk_totals[pxk].keys():
+                mh_to_pxks[mh].append(pxk)
+
+        for mh, pxks_with_mh in mh_to_pxks.items():
+            if len(pxks_with_mh) <= 1:
+                continue  # Skip single-PXK items (handled in Phase 2)
+
+            # Get unassigned form rows for this (inv, mh)
+            free_rows = [i for i in inv_mh_to_idxs.get((inv, mh), [])
+                        if not assigned[i]]
+            if not free_rows:
+                continue
+
+            # Calculate total needed
+            total_needed = sum(form_rows[i]["sl"] for i in free_rows)
+
+            # Get available quantities from each PXK
+            pxk_quantities = [(pxk, pxk_totals[pxk].get(mh, 0)) for pxk in pxks_with_mh]
+            pxk_quantities = [(p, q) for p, q in pxk_quantities if q > 0]
+
+            if not pxk_quantities:
+                continue
+
+            # Try to find combination of PXKs that sum to total_needed
+            target_cents = round(total_needed * 100)
+            n_pxks = len(pxk_quantities)
+
+            # Simple subset sum across PXKs
+            best_combo = None
+            best_score = float('inf')
+
+            for mask in range(1, 1 << n_pxks):
+                combo_sum = sum(round(pxk_quantities[i][1] * 100) for i in range(n_pxks) if mask & (1 << i))
+                if combo_sum == target_cents:
+                    combo = [pxk_quantities[i][0] for i in range(n_pxks) if mask & (1 << i)]
+                    best_combo = combo
+                    break
+                elif abs(combo_sum - target_cents) < best_score:
+                    best_score = abs(combo_sum - target_cents)
+
+            if best_combo and best_score <= 1:
+                # Now distribute rows to PXKs
+                remaining_rows = list(free_rows)
+                row_assignments = {}  # pxk -> [row_indices]
+
+                for pxk in sorted(best_combo, key=pxk_sort_key):
+                    pxk_target = pxk_totals[pxk].get(mh, 0)
+                    if not remaining_rows:
+                        break
+
+                    row_values = [form_rows[i]["sl"] for i in remaining_rows]
+                    sols = subset_sum_solutions(row_values, pxk_target, 1)
+
+                    if sols:
+                        assigned_rows = [remaining_rows[j] for j in sols[0]]
+                        row_assignments[pxk] = assigned_rows
+                        for r in assigned_rows:
+                            remaining_rows.remove(r)
+
+                # Mark all assigned rows
+                for pxk, rows in row_assignments.items():
+                    for i in rows:
+                        if not assigned[i]:
+                            assigned[i] = True
+                            result[i] = pxk
+                            status[i] = "auto"
+                            # Track other PXKs in this combo
+                            other_pxks = [p for p in best_combo if p != pxk]
+                            if other_pxks:
+                                split_info[i] = other_pxks
+                                note_pxks[i] = other_pxks
+                for pxk in row_assignments.keys():
+                    if pxk in unresolved:
+                        unresolved.discard(pxk)
+
+    # ── Phase 2: Iterative subset-sum propagation ──────────────────────────────
     for _ in range(50):
         done = 0
         for pxk in sorted(unresolved, key=pxk_sort_key):
@@ -292,18 +371,25 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
             for mh, target in pxk_totals[pxk].items():
                 free = get_free(mh, pxk_dos)
                 sols = subset_sum_solutions([form_rows[i]["sl"] for i in free], target, 2)
-                if not sols: ok = False; break
-                if len(sols) > 1: unique = False; break
+                if not sols:
+                    ok = False
+                    break
+                if len(sols) > 1:
+                    unique = False
+                    break
                 plan[mh] = [free[j] for j in sols[0]]
             if ok and unique:
                 for idxs in plan.values():
                     for i in idxs:
-                        assigned[i] = True; result[i] = pxk; status[i] = "auto"
-                unresolved.discard(pxk); done += 1
+                        assigned[i] = True
+                        result[i] = pxk
+                        status[i] = "auto"
+                unresolved.discard(pxk)
+                done += 1
         if done == 0:
             break
 
-    # ── Phase 2: ambiguous fallback ────────────────────────────────────────────
+    # ── Phase 3: Ambiguous fallback ────────────────────────────────────────────
     pxk_cands = {}
     for pxk in sorted(unresolved, key=pxk_sort_key):
         pxk_dos = pxk_do_no.get(pxk, set())
@@ -311,7 +397,9 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
         for mh, target in pxk_totals[pxk].items():
             free = get_free(mh, pxk_dos)
             sols = subset_sum_solutions([form_rows[i]["sl"] for i in free], target, 10)
-            if not sols: ok = False; break
+            if not sols:
+                ok = False
+                break
             plan[mh] = [free[j] for j in sols[0]]
         if ok:
             pxk_cands[pxk] = plan
@@ -326,7 +414,9 @@ def match_pxk(form_rows, pxk_totals, pxk_do_no):
         for idxs in pxk_cands[pxk].values():
             for i in idxs:
                 if not assigned[i]:
-                    assigned[i] = True; result[i] = pxk; status[i] = "ambiguous"
+                    assigned[i] = True
+                    result[i] = pxk
+                    status[i] = "ambiguous"
 
     return result, status, note_pxks
 
