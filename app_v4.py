@@ -1,14 +1,57 @@
+from pathlib import Path
+import importlib.util
+import sys
+
 import pandas as pd
 import streamlit as st
 
-from pxk_core_v4 import (
+
+def _load_pxk_core_v4():
+    try:
+        from pxk_core_v4 import (  # type: ignore
+            build_output_excel,
+            extract_pdfs_from_files,
+            load_reference_scorer,
+            match_pxk_v4,
+            pxk_sort_key,
+            read_form_rows_from_bytes,
+        )
+        return (
+            build_output_excel,
+            extract_pdfs_from_files,
+            load_reference_scorer,
+            match_pxk_v4,
+            pxk_sort_key,
+            read_form_rows_from_bytes,
+        )
+    except ModuleNotFoundError:
+        core_path = Path(__file__).with_name("pxk_core_v4.py")
+        if not core_path.exists():
+            raise
+        spec = importlib.util.spec_from_file_location("pxk_core_v4", core_path)
+        if spec is None or spec.loader is None:
+            raise
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["pxk_core_v4"] = module
+        spec.loader.exec_module(module)
+        return (
+            module.build_output_excel,
+            module.extract_pdfs_from_files,
+            module.load_reference_scorer,
+            module.match_pxk_v4,
+            module.pxk_sort_key,
+            module.read_form_rows_from_bytes,
+        )
+
+
+(
     build_output_excel,
     extract_pdfs_from_files,
     load_reference_scorer,
     match_pxk_v4,
     pxk_sort_key,
     read_form_rows_from_bytes,
-)
+) = _load_pxk_core_v4()
 
 
 st.set_page_config(
