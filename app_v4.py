@@ -104,7 +104,7 @@ with st.sidebar:
         "🚀 Bắt đầu xử lý",
         type="primary",
         disabled=not (pdf_files and form_file),
-        use_container_width=True,
+        width='stretch',
     )
     st.divider()
     st.caption("💡 Màu sắc kết quả:")
@@ -199,7 +199,7 @@ if run_btn or st.session_state.get("processed_v4"):
 
     if pdf_errors:
         with st.expander(f"⚠️ {len(pdf_errors)} file PDF có lỗi"):
-            st.dataframe(pd.DataFrame(pdf_errors), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(pdf_errors), hide_index=True, width='stretch')
 
     rows_data = []
     for fr in form_rows:
@@ -247,7 +247,7 @@ if run_btn or st.session_state.get("processed_v4"):
     if filter_state != "Tất cả":
         df_show = df_show[df_show["Trạng thái"] == filter_state]
 
-    st.dataframe(df_show, use_container_width=True, hide_index=True, height=420)
+    st.dataframe(df_show, width='stretch', hide_index=True, height=420)
     st.caption(f"Hiển thị {len(df_show):,} / {len(df):,} dòng")
 
     st.download_button(
@@ -256,5 +256,5 @@ if run_btn or st.session_state.get("processed_v4"):
         file_name="FORM_CHUA_NHAP_DA_DIEN_PXK_v4.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
-        use_container_width=True,
+        width='stretch',
     )
