@@ -26,6 +26,7 @@ import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment
 
 from pdf_extractor import extract_pxk
+from excel_writer import results_to_dataframe, results_to_excel
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -138,11 +139,12 @@ def subset_sum_solutions(values, target, max_sols=10):
 
 @st.cache_data(show_spinner=False)
 def extract_pdfs(file_bytes_list):
-    """Returns (pxk_totals, pxk_dates, pxk_do_no, errors)"""
-    pxk_totals = defaultdict(lambda: defaultdict(float))
-    pxk_dates  = {}
-    pxk_do_no  = {}   # pxk -> set of normalized D/O No strings
-    errors     = []
+    """Returns (pxk_totals, pxk_dates, pxk_do_no, errors, raw_results)"""
+    pxk_totals  = defaultdict(lambda: defaultdict(float))
+    pxk_dates   = {}
+    pxk_do_no   = {}   # pxk -> set of normalized D/O No strings
+    errors      = []
+    raw_results = []
     with tempfile.TemporaryDirectory() as tmpdir:
         for fname, fbytes in file_bytes_list:
             tmp = os.path.join(tmpdir, fname)
@@ -154,6 +156,7 @@ def extract_pdfs(file_bytes_list):
             pxk = str(res.get("so_phieu", ""))
             if not pxk:
                 errors.append({"file": fname, "lỗi": "Không tìm được số PXK"}); continue
+            raw_results.append(res)
             ngay = res.get("ngay", "")
             if ngay and pxk not in pxk_dates:
                 pxk_dates[pxk] = str(ngay)
@@ -162,7 +165,7 @@ def extract_pdfs(file_bytes_list):
                 pxk_do_no[pxk] = norm_do_no(do_raw)
             for item in res.get("items", []):
                 pxk_totals[pxk][item["ma_hang"]] += item["so_luong"]
-    return dict(pxk_totals), pxk_dates, pxk_do_no, errors
+    return dict(pxk_totals), pxk_dates, pxk_do_no, errors, raw_results
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -496,7 +499,7 @@ if run_btn or st.session_state.get("processed"):
         with st.status("⏳ Đang xử lý...", expanded=True) as sb:
             fbl = [(f.name, f.read()) for f in pdf_files]
             st.write(f"📄 Đang trích xuất {len(fbl)} file PDF...")
-            pxk_totals, pxk_dates, pxk_do_no, pdf_errors = extract_pdfs(fbl)
+            pxk_totals, pxk_dates, pxk_do_no, pdf_errors, raw_results = extract_pdfs(fbl)
             do_covered = sum(1 for p in pxk_totals if p in pxk_do_no)
             st.write(f"✅ {len(pxk_totals)} PXK "
                      f"({do_covered} có D/O No)"
@@ -526,21 +529,24 @@ if run_btn or st.session_state.get("processed"):
 
             st.write("💾 Đang tạo Excel kết quả...")
             out_bytes = build_output_excel(form_bytes, form_rows, res, stl, np_, pxk_dates)
+            extract_bytes = results_to_excel(raw_results)
 
             st.session_state["results_cache"] = dict(
                 pxk_totals=pxk_totals, pxk_dates=pxk_dates, pxk_do_no=pxk_do_no,
                 form_rows=form_rows, result=res, status_list=stl,
                 note_pxks=np_, output_bytes=out_bytes, pdf_errors=pdf_errors,
+                raw_results=raw_results, extract_bytes=extract_bytes,
             )
             st.session_state["processed"] = True
             sb.update(label="✅ Xử lý hoàn tất!", state="complete")
 
     cache = st.session_state["results_cache"]
-    pxk_totals   = cache["pxk_totals"];  pxk_dates  = cache["pxk_dates"]
-    pxk_do_no    = cache["pxk_do_no"];   form_rows  = cache["form_rows"]
-    result       = cache["result"];       status_list= cache["status_list"]
-    note_pxks    = cache["note_pxks"];   output_bytes=cache["output_bytes"]
-    pdf_errors   = cache["pdf_errors"]
+    pxk_totals   = cache["pxk_totals"];  pxk_dates   = cache["pxk_dates"]
+    pxk_do_no    = cache["pxk_do_no"];   form_rows   = cache["form_rows"]
+    result       = cache["result"];       status_list = cache["status_list"]
+    note_pxks    = cache["note_pxks"];   output_bytes = cache["output_bytes"]
+    pdf_errors   = cache["pdf_errors"];  raw_results  = cache["raw_results"]
+    extract_bytes = cache["extract_bytes"]
 
     n_auto = sum(1 for s in status_list if s=="auto")
     n_amb  = sum(1 for s in status_list if s=="ambiguous")
@@ -615,21 +621,76 @@ if run_btn or st.session_state.get("processed"):
 
     # Download
     st.subheader("⬇️ Tải file kết quả")
-    c_dl, c_info = st.columns([1,2])
-    with c_dl:
+    tab_form, tab_extract = st.tabs(["📋 Form đã điền PXK", "📄 Dữ liệu trích xuất PDF"])
+
+    with tab_form:
+        c_dl, c_info = st.columns([1, 2])
+        with c_dl:
+            st.download_button(
+                label="📥 Tải FORM ĐÃ ĐIỀN PXK (.xlsx)",
+                data=output_bytes,
+                file_name="FORM_CHƯA_NHẬP_ĐÃ_ĐIỀN_PXK.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary", use_container_width=True,
+            )
+        with c_info:
+            st.info(
+                "**Cột bổ sung trong Excel:**\n"
+                "- Cột 7: Số PXK (AUTO) — 🟢/🟡/🔴\n"
+                "- Cột 17: Trạng thái\n"
+                "- Cột 18: PXK khả dĩ khác\n"
+                "- Cột 19: Ngày PXK\n"
+                "- Cột 20: 📌 Ghi chú (đánh dấu PXK cuối)"
+            )
+
+    with tab_extract:
+        # Preview extracted data (similar to PXK_XNK_SMC app)
+        ext_df = results_to_dataframe(raw_results)
+        if not ext_df.empty:
+            total_pxk  = ext_df["so_phieu"].nunique()
+            total_rows = len(ext_df)
+            total_sl   = ext_df["so_luong"].sum()
+            total_tien = ext_df["thanh_tien"].sum()
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("📄 Số PXK", f"{total_pxk}")
+            k2.metric("📋 Dòng hàng", f"{total_rows:,}")
+            k3.metric("📦 Tổng số lượng", f"{total_sl:,.0f}")
+            k4.metric("💰 Tổng thành tiền", f"{total_tien:,.0f} ₫")
+
+            col_search, col_ma = st.columns([3, 2])
+            with col_search:
+                search_pxk = st.text_input("🔍 Lọc theo Số PXK", placeholder="VD: 1174", key="ext_pxk")
+            with col_ma:
+                search_ma = st.text_input("🔍 Lọc theo Mã hàng", placeholder="VD: DC97-22471T", key="ext_ma")
+
+            disp_df = ext_df.copy()
+            if search_pxk:
+                disp_df = disp_df[disp_df["so_phieu"].str.contains(search_pxk, na=False)]
+            if search_ma:
+                disp_df = disp_df[disp_df["ma_hang"].str.contains(search_ma, case=False, na=False)]
+
+            st.dataframe(
+                disp_df.rename(columns={
+                    "so_phieu":   "Số PXK",
+                    "ngay":       "Ngày",
+                    "do_no":      "D/O No",
+                    "ma_hang":    "Mã hàng",
+                    "ten_hang":   "Tên hàng",
+                    "dvt":        "ĐVT",
+                    "so_luong":   "Số lượng",
+                    "don_gia":    "Đơn giá",
+                    "thanh_tien": "Thành tiền",
+                    "file_name":  "File nguồn",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
         st.download_button(
-            label="📥 Tải FORM ĐÃ ĐIỀN PXK (.xlsx)",
-            data=output_bytes,
-            file_name="FORM_CHƯA_NHẬP_ĐÃ_ĐIỀN_PXK.xlsx",
+            label="📥 Tải dữ liệu trích xuất PDF (.xlsx)",
+            data=extract_bytes,
+            file_name="du_lieu_pxk_trich_xuat.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary", use_container_width=True,
+            type="primary", use_container_width=False,
         )
-    with c_info:
-        st.info(
-            "**Cột bổ sung trong Excel:**\n"
-            "- Cột 7: Số PXK (AUTO) — 🟢/🟡/🔴\n"
-            "- Cột 17: Trạng thái\n"
-            "- Cột 18: PXK khả dĩ khác\n"
-            "- Cột 19: Ngày PXK\n"
-            "- Cột 20: 📌 Ghi chú (đánh dấu PXK cuối)"
-        )
+        st.caption(f"File Excel chứa đầy đủ thông tin trích xuất từ {len(raw_results)} phiếu PDF.")
