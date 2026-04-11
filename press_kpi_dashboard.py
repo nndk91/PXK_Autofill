@@ -305,15 +305,29 @@ def main():
         st.markdown("---")
         st.markdown("<div style='font-size:0.8rem;color:#8a90a8;'>UPH = Actual / Operating Time</div>", unsafe_allow_html=True)
     
-    # Load data
+    # Validate and load data
     if isinstance(uploaded_file, str):
+        if not uploaded_file.endswith(('.xlsx', '.xls', '.xlsm')):
+            st.error("❌ File không hợp lệ! Vui lòng upload file Excel (.xlsx, .xls, .xlsm)")
+            return
         df_sum, df_loss = load_data(uploaded_file)
     else:
+        # Check file extension
+        if not uploaded_file.name.endswith(('.xlsx', '.xls', '.xlsm')):
+            st.error("❌ File không hợp lệ! Vui lòng upload file Excel (.xlsx, .xls, .xlsm)")
+            st.stop()
+            return
         # Save uploaded file temporarily
         temp_path = f"temp_{uploaded_file.name}"
         with open(temp_path, 'wb') as f:
             f.write(uploaded_file.getvalue())
-        df_sum, df_loss = load_data(temp_path)
+        try:
+            df_sum, df_loss = load_data(temp_path)
+        except Exception as e:
+            st.error(f"❌ Lỗi khi đọc file: {str(e)}")
+            st.info("💡 Vui lòng kiểm tra file có đúng định dạng Excel không.")
+            os.remove(temp_path)
+            return
         os.remove(temp_path)
     
     df_sum, df_loss = process_data(df_sum, df_loss)
