@@ -15,6 +15,21 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
+import glob
+
+def find_latest_excel_file():
+    """Find the most recently modified Excel file in the current directory"""
+    excel_patterns = ['*.xlsm', '*.xlsx', '*.xls']
+    files = []
+    for pattern in excel_patterns:
+        files.extend(glob.glob(pattern))
+    
+    if not files:
+        return None
+    
+    # Get the most recently modified file
+    latest_file = max(files, key=os.path.getmtime)
+    return latest_file
 
 # Page config
 st.set_page_config(
@@ -69,10 +84,32 @@ st.markdown("""
 @st.cache_data
 def load_data(excel_path):
     """Load and process data from Excel file"""
-    # Load Sum sheet
+    # Try to detect the correct header row
     df_raw = pd.read_excel(excel_path, sheet_name='Sum', header=None)
-    df_sum = df_raw.iloc[7:].copy()
-    df_sum.columns = df_raw.iloc[6]
+    
+    # Find the row with 'No' and 'Shift' columns (header row)
+    header_row = None
+    for i in range(min(15, len(df_raw))):
+        row_values = df_raw.iloc[i].astype(str).tolist()
+        if 'No' in row_values and 'Shift' in row_values:
+            if i + 1 < len(df_raw):
+                next_row_first = df_raw.iloc[i + 1, 0]
+                if pd.notna(next_row_first) and str(next_row_first).strip().isdigit():
+                    header_row = i
+                    break
+            for j in range(i + 1, min(i + 8, len(df_raw))):
+                if j < len(df_raw):
+                    check_val = df_raw.iloc[j, 0]
+                    if pd.notna(check_val) and str(check_val).strip().isdigit():
+                        header_row = i
+                        break
+    
+    if header_row is None:
+        header_row = 6  # fallback
+    
+    # Load data with detected header
+    df_sum = df_raw.iloc[header_row + 1:].copy()
+    df_sum.columns = df_raw.iloc[header_row]
     df_sum = df_sum.iloc[1:].reset_index(drop=True)
     
     # Clean data types
@@ -202,6 +239,7 @@ def get_by_code_data(df_sum, period='all', from_period=None, to_period=None):
     code_data['OEE'] = code_data.apply(lambda x: round(x['Capacity'] / x['Plan'] * 100, 2) if x['Plan'] > 0 else 0, axis=1)
     code_data['PPM'] = code_data.apply(lambda x: round(x['Q.ty defect'] / x['Capacity'] * 1e6, 0) if x['Capacity'] > 0 else 0, axis=1)
     code_data['UPH'] = code_data.apply(lambda x: calculate_uph(x['Capacity'], x['Operating time']), axis=1)
+    code_data['NG_Rate'] = code_data.apply(lambda x: round(x['Q.ty defect'] / x['Capacity'] * 100, 2) if x['Capacity'] > 0 else 0, axis=1)
     
     return code_data.sort_values('Capacity', ascending=False)
 
@@ -284,11 +322,11 @@ def main():
         uploaded_file = st.file_uploader("Upload Excel File", type=['xlsx', 'xls', 'xlsm'])
         
         if uploaded_file is None:
-            # Try default file
-            default_file = 'Press_KPIs_control__V5_10.4.2026_T1_T2_T3.xlsm'
-            if os.path.exists(default_file):
-                uploaded_file = default_file
-                st.success(f"Using default file: {default_file}")
+            # Try to find the latest Excel file
+            latest_file = find_latest_excel_file()
+            if latest_file:
+                uploaded_file = latest_file
+                st.success(f"Using latest file: {latest_file}")
             else:
                 st.warning("Please upload an Excel file")
                 return
@@ -521,6 +559,21 @@ def show_by_code(df_sum, df_loss=None):
                 top_uph = uph_data_valid.loc[uph_data_valid['UPH'].idxmax()]
                 st.metric("🔼 UPH cao nhất", top_uph['Part code'], f"{top_uph['UPH']:.2f} pcs/h")
     
+    # KPI Cards - NG Rate cao nhất & thấp nhất
+    st.markdown("#### 📊 NG Rate (tỷ lệ phần trăm)")
+    cols = st.columns(4)
+    ng_positive = code_data[code_data['Capacity'] > 0]
+    if len(ng_positive) > 0:
+        with cols[0]:
+            top_ng_rate = ng_positive.loc[ng_positive['NG_Rate'].idxmax()]
+            st.metric("🔼 NG Rate cao nhất", top_ng_rate['Part code'], f"{top_ng_rate['NG_Rate']:.2f}%")
+        with cols[1]:
+            # NG Rate thấp nhất (có sản lượng > 0 và NG > 0)
+            ng_with_defects = ng_positive[ng_positive['Q.ty defect'] > 0]
+            if len(ng_with_defects) > 0:
+                low_ng_rate = ng_with_defects.loc[ng_with_defects['NG_Rate'].idxmin()]
+                st.metric("🔽 NG Rate thấp nhất", low_ng_rate['Part code'], f"{low_ng_rate['NG_Rate']:.2f}%")
+    
     # KPI Cards - Thấp nhất
     st.markdown("#### 📉 Thống kê thấp nhất (có sản lượng > 0)")
     cols = st.columns(4)
@@ -545,9 +598,9 @@ def show_by_code(df_sum, df_loss=None):
     
     st.markdown("---")
     
-    # ========== CHARTS CAO NHẤT (3 chart trên 1 hàng) ==========
+    # ========== CHARTS CAO NHẤT (4 chart trên 1 hàng) ==========
     st.markdown("#### 📈 Charts - Cao nhất")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         # Top 10 Volume - code_data đã sắp xếp theo Capacity giảm dần
@@ -584,9 +637,21 @@ def show_by_code(df_sum, df_loss=None):
                               yaxis=dict(type='category', tickmode='linear'))
             st.plotly_chart(fig, use_container_width=True, key=f"code_ng_top_{period_key}")
     
-    # ========== CHARTS THẤP NHẤT (3 chart trên 1 hàng) ==========
+    with col4:
+        # Top 10 NG Rate (%) - Sắp xếp giảm dần
+        ngrate_data_top = code_data[code_data['Capacity'] > 0].nlargest(10, 'NG_Rate').sort_values('NG_Rate', ascending=True).copy()
+        ngrate_data_top['Part code'] = ngrate_data_top['Part code'].apply(ensure_part_code_string)
+        if len(ngrate_data_top) > 0:
+            fig = px.bar(ngrate_data_top, y='Part code', x='NG_Rate', orientation='h',
+                         title="🔼 NG Rate cao nhất (%)", color_discrete_sequence=['#ff6b6b'])
+            fig.update_layout(plot_bgcolor='#141720', paper_bgcolor='#0d0f14', font_color='#e8eaf0',
+                              height=300, margin=dict(l=10, r=10, t=30, b=10),
+                              yaxis=dict(type='category', tickmode='linear'))
+            st.plotly_chart(fig, use_container_width=True, key=f"code_ngrate_top_{period_key}")
+    
+    # ========== CHARTS THẤP NHẤT (4 chart trên 1 hàng) ==========
     st.markdown("#### 📉 Charts - Thấp nhất")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         # Low 10 Volume - Sắp xếp theo Capacity tăng dần (thấp nhất ở trên)
@@ -627,6 +692,19 @@ def show_by_code(df_sum, df_loss=None):
                               yaxis=dict(type='category', tickmode='linear'))
             st.plotly_chart(fig, use_container_width=True, key=f"code_ng_low_{period_key}")
     
+    with col4:
+        # Low 10 NG Rate (%) - Sắp xếp theo NG Rate tăng dần (có NG > 0)
+        ng_with_defects = code_data[(code_data['Capacity'] > 0) & (code_data['Q.ty defect'] > 0)].copy()
+        if len(ng_with_defects) > 0:
+            ngrate_data_low = ng_with_defects.nsmallest(10, 'NG_Rate').sort_values('NG_Rate', ascending=True).copy()
+            ngrate_data_low['Part code'] = ngrate_data_low['Part code'].apply(ensure_part_code_string)
+            fig = px.bar(ngrate_data_low, y='Part code', x='NG_Rate', orientation='h',
+                         title="🔽 NG Rate thấp nhất (%)", color_discrete_sequence=['#2dd4a0'])
+            fig.update_layout(plot_bgcolor='#141720', paper_bgcolor='#0d0f14', font_color='#e8eaf0',
+                              height=300, margin=dict(l=10, r=10, t=30, b=10),
+                              yaxis=dict(type='category', tickmode='linear'))
+            st.plotly_chart(fig, use_container_width=True, key=f"code_ngrate_low_{period_key}")
+    
     # Search and table
     st.markdown("### 📋 Chi tiết toàn bộ Part Code")
     search = st.text_input("🔍 Tìm kiếm Part Code hoặc Part Name:", "", key=f"code_search_{period_key}")
@@ -639,8 +717,8 @@ def show_by_code(df_sum, df_loss=None):
     else:
         filtered = code_data
     
-    display_df = filtered[['Part code', 'Part name', 'Plan', 'Capacity', 'OEE', 'Q.ty defect', 'PPM', 'Loss time', 'UPH']].copy()
-    display_df.columns = ['Part Code', 'Part Name', 'Plan', 'Actual', 'OEE (%)', 'NG', 'PPM', 'Loss (h)', 'UPH']
+    display_df = filtered[['Part code', 'Part name', 'Plan', 'Capacity', 'OEE', 'Q.ty defect', 'PPM', 'NG_Rate', 'Loss time', 'UPH']].copy()
+    display_df.columns = ['Part Code', 'Part Name', 'Plan', 'Actual', 'OEE (%)', 'NG', 'PPM', 'NG Rate (%)', 'Loss (h)', 'UPH']
     display_df['Part Code'] = display_df['Part Code'].apply(ensure_part_code_string)
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     
