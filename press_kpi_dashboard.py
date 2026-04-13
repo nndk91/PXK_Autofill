@@ -82,8 +82,14 @@ st.markdown("""
 
 # Helper functions
 @st.cache_data
-def load_data(excel_path):
-    """Load and process data from Excel file"""
+def load_data(excel_path, file_mtime=None):
+    """Load and process data from Excel file
+    
+    Args:
+        excel_path: Path to the Excel file
+        file_mtime: File modification time (used for cache invalidation)
+    """
+    # file_mtime is used to invalidate cache when file changes
     # Try to detect the correct header row
     df_raw = pd.read_excel(excel_path, sheet_name='Sum', header=None)
     
@@ -342,13 +348,20 @@ def main():
         
         st.markdown("---")
         st.markdown("<div style='font-size:0.8rem;color:#8a90a8;'>UPH = Actual / Operating Time</div>", unsafe_allow_html=True)
+        
+        # Refresh button to clear cache
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
     
     # Validate and load data
     if isinstance(uploaded_file, str):
         if not uploaded_file.endswith(('.xlsx', '.xls', '.xlsm')):
             st.error("❌ File không hợp lệ! Vui lòng upload file Excel (.xlsx, .xls, .xlsm)")
             return
-        df_sum, df_loss = load_data(uploaded_file)
+        # Get file modification time for cache invalidation
+        file_mtime = os.path.getmtime(uploaded_file)
+        df_sum, df_loss = load_data(uploaded_file, file_mtime)
     else:
         # Check file extension
         if not uploaded_file.name.endswith(('.xlsx', '.xls', '.xlsm')):
@@ -360,7 +373,9 @@ def main():
         with open(temp_path, 'wb') as f:
             f.write(uploaded_file.getvalue())
         try:
-            df_sum, df_loss = load_data(temp_path)
+            # Get file modification time for cache invalidation
+            file_mtime = os.path.getmtime(temp_path)
+            df_sum, df_loss = load_data(temp_path, file_mtime)
         except Exception as e:
             st.error(f"❌ Lỗi khi đọc file: {str(e)}")
             st.info("💡 Vui lòng kiểm tra file có đúng định dạng Excel không.")
