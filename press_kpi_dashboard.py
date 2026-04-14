@@ -82,16 +82,18 @@ st.markdown("""
 
 # Helper functions
 @st.cache_data
-def load_data(excel_path, file_mtime=None):
-    """Load and process data from Excel file
+def load_data(excel_path):
+    """Load and process data from Excel file"""
+    # Determine engine based on file extension
+    if excel_path.endswith('.xlsm'):
+        engine = 'openpyxl'
+    elif excel_path.endswith('.xls'):
+        engine = 'xlrd'
+    else:
+        engine = None  # Let pandas auto-detect
     
-    Args:
-        excel_path: Path to the Excel file
-        file_mtime: File modification time (used for cache invalidation)
-    """
-    # file_mtime is used to invalidate cache when file changes
     # Try to detect the correct header row
-    df_raw = pd.read_excel(excel_path, sheet_name='Sum', header=None)
+    df_raw = pd.read_excel(excel_path, sheet_name='Sum', header=None, engine=engine)
     
     # Find the row with 'No' and 'Shift' columns (header row)
     header_row = None
@@ -128,7 +130,7 @@ def load_data(excel_path, file_mtime=None):
     df_sum = df_sum.dropna(subset=['Date'])
     
     # Load Loss data
-    df_loss = pd.read_excel(excel_path, sheet_name='Data_Loss', header=0)
+    df_loss = pd.read_excel(excel_path, sheet_name='Data_Loss', header=0, engine=engine)
     df_loss['Date'] = pd.to_datetime(df_loss['Date'], errors='coerce')
     df_loss['Loss time'] = pd.to_numeric(df_loss['Loss time'], errors='coerce').fillna(0)
     df_loss = df_loss.dropna(subset=['Date'])
@@ -348,20 +350,13 @@ def main():
         
         st.markdown("---")
         st.markdown("<div style='font-size:0.8rem;color:#8a90a8;'>UPH = Actual / Operating Time</div>", unsafe_allow_html=True)
-        
-        # Refresh button to clear cache
-        if st.button("🔄 Refresh Data", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
     
     # Validate and load data
     if isinstance(uploaded_file, str):
         if not uploaded_file.endswith(('.xlsx', '.xls', '.xlsm')):
             st.error("❌ File không hợp lệ! Vui lòng upload file Excel (.xlsx, .xls, .xlsm)")
             return
-        # Get file modification time for cache invalidation
-        file_mtime = os.path.getmtime(uploaded_file)
-        df_sum, df_loss = load_data(uploaded_file, file_mtime)
+        df_sum, df_loss = load_data(uploaded_file)
     else:
         # Check file extension
         if not uploaded_file.name.endswith(('.xlsx', '.xls', '.xlsm')):
@@ -373,9 +368,7 @@ def main():
         with open(temp_path, 'wb') as f:
             f.write(uploaded_file.getvalue())
         try:
-            # Get file modification time for cache invalidation
-            file_mtime = os.path.getmtime(temp_path)
-            df_sum, df_loss = load_data(temp_path, file_mtime)
+            df_sum, df_loss = load_data(temp_path)
         except Exception as e:
             st.error(f"❌ Lỗi khi đọc file: {str(e)}")
             st.info("💡 Vui lòng kiểm tra file có đúng định dạng Excel không.")
@@ -489,8 +482,14 @@ def show_time_view(df_sum, period):
         st.plotly_chart(fig, use_container_width=True, key=f"{period}_uph_chart")
     
     with col3:
-        # Line performance
-        line_data = df_sum.groupby('Line').agg({'Plan': 'sum', 'Capacity': 'sum', 'Q.ty defect': 'sum'}).reset_index()
+        # Line performance - filter by the same date range as other charts
+        if period == 'monthly':
+            line_df = df_sum[(df_sum['YearMonth'] >= from_val) & (df_sum['YearMonth'] <= to_val)]
+        elif period == 'weekly':
+            line_df = df_sum[(df_sum['YearWeek'] >= from_val) & (df_sum['YearWeek'] <= to_val)]
+        else:  # daily
+            line_df = df_sum[(df_sum['Date_str'] >= from_val) & (df_sum['Date_str'] <= to_val)]
+        line_data = line_df.groupby('Line').agg({'Plan': 'sum', 'Capacity': 'sum', 'Q.ty defect': 'sum'}).reset_index()
         fig = go.Figure()
         fig.add_trace(go.Bar(name='Plan', x=line_data['Line'], y=line_data['Plan'], marker_color='#3b8eea'))
         fig.add_trace(go.Bar(name='Actual', x=line_data['Line'], y=line_data['Capacity'], marker_color='#2dd4a0'))
