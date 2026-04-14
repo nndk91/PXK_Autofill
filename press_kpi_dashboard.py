@@ -24,6 +24,9 @@ def find_latest_excel_file():
     for pattern in excel_patterns:
         files.extend(glob.glob(pattern))
     
+    # Filter out temporary files (starting with ~$)
+    files = [f for f in files if not os.path.basename(f).startswith('~$')]
+    
     if not files:
         return None
     
@@ -312,12 +315,15 @@ def get_loss_data(df_loss, period='all', from_period=None, to_period=None):
     # Phân loại theo kế hoạch
     loss_plan_type = filtered_loss.groupby('Loss type')['Loss time'].sum().reset_index().sort_values('Loss time', ascending=False)
     
+    # Loss by Machine (Line)
+    loss_by_machine = filtered_loss.groupby('Line')['Loss time'].sum().reset_index().sort_values('Loss time', ascending=False)
+    
     # Chi tiết loss với thởi gian
     loss_details = filtered_loss[['Date', 'Part code', 'Part name', 'Loss type', 'Reason', 'Dept PIC', 'Start time', 'End time', 'Loss time']].sort_values('Loss time', ascending=False).head(50)
     
     total_loss = filtered_loss['Loss time'].sum()
     
-    return loss_reason, loss_dept, loss_type, loss_by_code, loss_plan_type, loss_details, total_loss
+    return loss_reason, loss_dept, loss_type, loss_by_code, loss_plan_type, loss_details, total_loss, loss_by_machine, filtered_loss
 
 # Main app
 def main():
@@ -917,7 +923,7 @@ def show_loss_time_view(df_loss, period):
         to_period = st.selectbox("Đến:", periods, index=len(periods)-1, key=f"loss_to_{period}")
     
     # Get filtered loss data
-    loss_reason, loss_dept, loss_type, loss_by_code, loss_plan_type, loss_details, total_loss = \
+    loss_reason, loss_dept, loss_type, loss_by_code, loss_plan_type, loss_details, total_loss, loss_by_machine, filtered_loss = \
         get_loss_data(df_loss, period, from_period, to_period)
     
     # KPI Cards - Phân loại theo kế hoạch
@@ -976,6 +982,36 @@ def show_loss_time_view(df_loss, period):
                           height=280, margin=dict(l=10, r=10, t=30, b=10), 
                           yaxis=dict(type='category', tickmode='linear'))
         st.plotly_chart(fig, use_container_width=True, key=f"loss_code_chart_{period}")
+    
+    # Loss by Machine chart - full width row
+    st.markdown("---")
+    st.markdown("### 🏭 Phân tích Loss Time theo Máy")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        fig = px.bar(loss_by_machine, x='Line', y='Loss time',
+                     title="Loss Time Theo Máy", color_discrete_sequence=['#38c4d4'])
+        fig.update_layout(plot_bgcolor='#141720', paper_bgcolor='#0d0f14', font_color='#e8eaf0',
+                          height=450, margin=dict(l=10, r=10, t=40, b=10))
+        st.plotly_chart(fig, use_container_width=True, key=f"loss_machine_chart_{period}")
+    
+    with col2:
+        # Loss by Machine and Reason - Stacked Bar Chart
+        loss_machine_reason = filtered_loss.groupby(['Line', 'Reason'])['Loss time'].sum().reset_index()
+        if len(loss_machine_reason) > 0:
+            # Only show top reasons to avoid overcrowding
+            top_reasons = loss_machine_reason.groupby('Reason')['Loss time'].sum().nlargest(8).index.tolist()
+            filtered_chart_data = loss_machine_reason[loss_machine_reason['Reason'].isin(top_reasons)]
+            
+            fig = px.bar(filtered_chart_data, x='Line', y='Loss time', color='Reason',
+                         title="Loss Time Theo Máy và Nguyên Nhân",
+                         color_discrete_sequence=px.colors.qualitative.Set3)
+            fig.update_layout(plot_bgcolor='#141720', paper_bgcolor='#0d0f14', font_color='#e8eaf0',
+                              barmode='stack',
+                              height=450, margin=dict(l=10, r=10, t=40, b=10),
+                              legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=9)))
+            st.plotly_chart(fig, use_container_width=True, key=f"loss_machine_reason_chart_{period}")
     
     # Tables
     col1, col2 = st.columns(2)
