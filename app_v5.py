@@ -453,6 +453,65 @@ if run_btn or st.session_state.get('processed'):
             with st.expander(f'⚠️ {len(pdf_errors)} file PDF lỗi'):
                 st.dataframe(pd.DataFrame(pdf_errors), hide_index=True)
         
+        # Thêm phần xem chi tiết dữ liệu PDF đã trích xuất
+        st.divider()
+        with st.expander('📄 Xem chi tiết dữ liệu PDF đã trích xuất', expanded=False):
+            pxk_totals_view = cache['pxk_totals']
+            pxk_items_view = cache.get('pxk_items', {})
+            pxk_dates_view = cache['pxk_dates']
+            pxk_do_no_view = cache['pxk_do_no']
+            
+            # Cho phép chọn chế độ xem
+            view_mode_full = st.radio(
+                'Chế độ xem:',
+                ['chi_tiet', 'gop'],
+                format_func=lambda x: '🔍 Xem từng dòng riêng biệt' if x == 'chi_tiet' else '📊 Xem gộp theo mã hàng',
+                horizontal=True,
+                key='view_mode_full'
+            )
+            
+            display_data_full = []
+            if view_mode_full == 'chi_tiet' and pxk_items_view:
+                for pxk, items in pxk_items_view.items():
+                    for item in items:
+                        display_data_full.append({
+                            'Số PXK': pxk,
+                            'Ngày': pxk_dates_view.get(pxk, ''),
+                            'D/O No': ', '.join(pxk_do_no_view.get(pxk, [])),
+                            'Dòng': item.get('line_no', ''),
+                            'Mã hàng': item.get('ma_hang', ''),
+                            'Tên hàng': item.get('ten_hang', '')[:50],
+                            'Số lượng': item.get('so_luong', 0),
+                            'ĐVT': item.get('dvt', ''),
+                        })
+            else:
+                for pxk, items in pxk_totals_view.items():
+                    for ma_hang, sl in items.items():
+                        display_data_full.append({
+                            'Số PXK': pxk,
+                            'Ngày': pxk_dates_view.get(pxk, ''),
+                            'D/O No': ', '.join(pxk_do_no_view.get(pxk, [])),
+                            'Mã hàng': ma_hang,
+                            'Số lượng': sl,
+                        })
+            
+            df_full_display = pd.DataFrame(display_data_full)
+            
+            # Filter cho bảng PDF
+            col_f1, col_f2 = st.columns([3, 2])
+            with col_f1:
+                search_pxk_full = st.text_input('🔍 Lọc theo Số PXK', placeholder='VD: 1174', key='search_pxk_full')
+            with col_f2:
+                search_mh_full = st.text_input('🔍 Lọc theo Mã hàng', placeholder='VD: DC97-22471T', key='search_mh_full')
+            
+            df_full_filtered = df_full_display.copy()
+            if search_pxk_full:
+                df_full_filtered = df_full_filtered[df_full_filtered['Số PXK'].astype(str).str.contains(search_pxk_full)]
+            if search_mh_full:
+                df_full_filtered = df_full_filtered[df_full_filtered['Mã hàng'].str.contains(search_mh_full, case=False)]
+            
+            st.dataframe(df_full_filtered, use_container_width=True, hide_index=True, height=300)
+        
         # Bảng kết quả
         st.divider()
         st.subheader('📋 Chi tiết ghép PXK')
@@ -506,14 +565,72 @@ if run_btn or st.session_state.get('processed'):
         st.dataframe(df_show, use_container_width=True, hide_index=True, height=420)
         st.caption(f'Hiển thị {len(df_show):,} / {len(df):,} dòng')
         
-        # Download
+        # Download section - Cả 2 file
         st.divider()
-        st.subheader('⬇️ Tải file kết quả')
+        st.subheader('⬇️ Tải kết quả')
         
-        st.download_button(
-            label='📥 Tải FORM ĐÃ ĐIỀN PXK (.xlsx)',
-            data=output_bytes,
-            file_name='FORM_CHUA_NHAP_DA_DIEN_PXK_v5.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            type='primary',
-        )
+        # Tạo file dữ liệu trích xuất PDF để tải xuống
+        pxk_totals = cache['pxk_totals']
+        pxk_items = cache.get('pxk_items', {})
+        pxk_dates = cache['pxk_dates']
+        pxk_do_no = cache['pxk_do_no']
+        
+        # Tạo DataFrame chi tiết từ PDF
+        display_data = []
+        if pxk_items:
+            # Có chi tiết từng dòng riêng biệt
+            for pxk, items in pxk_items.items():
+                for item in items:
+                    display_data.append({
+                        'Số PXK': pxk,
+                        'Ngày': pxk_dates.get(pxk, ''),
+                        'D/O No': ', '.join(pxk_do_no.get(pxk, [])),
+                        'Dòng': item.get('line_no', ''),
+                        'Mã hàng': item.get('ma_hang', ''),
+                        'Tên hàng': item.get('ten_hang', '')[:50],
+                        'Số lượng': item.get('so_luong', 0),
+                        'ĐVT': item.get('dvt', ''),
+                        'Đơn giá': item.get('don_gia', 0),
+                        'Thành tiền': item.get('thanh_tien', 0),
+                    })
+        else:
+            # Chỉ có dạng gộp
+            for pxk, items in pxk_totals.items():
+                for ma_hang, sl in items.items():
+                    display_data.append({
+                        'Số PXK': pxk,
+                        'Ngày': pxk_dates.get(pxk, ''),
+                        'D/O No': ', '.join(pxk_do_no.get(pxk, [])),
+                        'Mã hàng': ma_hang,
+                        'Số lượng': sl,
+                    })
+        
+        df_pdf_data = pd.DataFrame(display_data)
+        
+        col_dl1, col_dl2 = st.columns(2)
+        
+        with col_dl1:
+            buffer_pdf = io.BytesIO()
+            df_pdf_data.to_excel(buffer_pdf, index=False, engine='openpyxl')
+            buffer_pdf.seek(0)
+            
+            st.download_button(
+                label='📄 Tải DỮ LIỆU PDF trích xuất (.xlsx)',
+                data=buffer_pdf.getvalue(),
+                file_name='du_lieu_pxk_trich_xuat.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                type='secondary',
+                use_container_width=True,
+            )
+            st.caption('Dữ liệu gốc trích xuất từ các file PDF')
+        
+        with col_dl2:
+            st.download_button(
+                label='📋 Tải FORM ĐÃ ĐIỀN PXK (.xlsx)',
+                data=output_bytes,
+                file_name='FORM_CHUA_NHAP_DA_DIEN_PXK_v5.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                type='primary',
+                use_container_width=True,
+            )
+            st.caption('Form đã được ghép số PXK tự động')
