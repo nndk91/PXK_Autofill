@@ -1,137 +1,97 @@
-# 📦 PXK Manager v5 - Hướng dẫn sử dụng
+# 🏭 HỆ THỐNG QUẢN LÝ CHI PHÍ SẢN XUẤT
 
-## ⚡ Cách chạy nhanh
+Hệ thống quản lý chi phí sản xuất với bảng biểu Excel, form nhập liệu web và hướng dẫn tạo Power BI dashboard.
 
-### Bước 1: Cài đặt thư viện (chỉ cần làm 1 lần)
+---
+
+## 📁 CẤU TRÚC FILE
+
+| File | Mô tả |
+|------|-------|
+| `QuanLy_ChiPhi_SanXuat.xlsx` | File Excel chính với 3 sheet: Dữ liệu gốc, Nhập liệu, Báo cáo |
+| `Data_For_PowerBI.xlsx` | File dữ liệu chuẩn hóa để import vào Power BI |
+| `app.py` | Ứng dụng web Streamlit để nhập liệu |
+| `HuongDan_PowerBI.md` | Hướng dẫn chi tiết tạo dashboard Power BI |
+| `CHIPHI SX T12.2025 - gửi anh Khoa.xlsx` | File dữ liệu gốc |
+
+---
+
+## 🚀 HƯỚNG DẪN SỬ DỤNG
+
+### Cách 1: Sử dụng Excel (Đơn giản)
+
+1. Mở file **`QuanLy_ChiPhi_SanXuat.xlsx`**
+2. Vào sheet **"NhapLieuChiPhi"**
+3. Nhập dữ liệu vào các dòng trống (đã có 38 dòng trống sẵn)
+4. File sẽ tự động tính tổng ở sheet **"BaoCaoTongHop"**
+
+### Cách 2: Sử dụng Web App (Trực quan)
+
 ```bash
-pip install streamlit pandas openpyxl pdfplumber PyMuPDF
+# 1. Kích hoạt môi trường
+source venv/bin/activate
+
+# 2. Chạy ứng dụng
+streamlit run app.py
 ```
 
-### Bước 2: Chạy ứng dụng
+Sau đó mở trình duyệt tại: http://localhost:8501
+
+**Tính năng:**
+- 📊 Xem tổng quan chi phí
+- ➕ Nhập/cập nhật dữ liệu qua form
+- 📈 Xem biểu đồ phân tích
+
+### Cách 3: Power BI Dashboard (Chuyên nghiệp)
+
+Xem file **`HuongDan_PowerBI.md`** để tạo dashboard chuyên nghiệp.
+
+Tóm tắt:
+1. Mở Power BI Desktop
+2. Import file `Data_For_PowerBI.xlsx`
+3. Tạo các measure DAX
+4. Thiết kế dashboard với charts
+
+---
+
+## 📊 DỮ LIỆU HIỆN TẠI (2025)
+
+| Chỉ Tiêu | Giá Trị |
+|----------|---------|
+| Tổng Lương CN | 12,443,606,026 VNĐ |
+| Tổng Chi Phí Điện | 3,071,157,054 VNĐ |
+| Tổng Dầu Dập | 2,888,400,000 VNĐ |
+| Tổng Sản Lượng | 1,453,854 SP |
+| **TỔNG CHI PHÍ** | **18,403,163,080 VNĐ** |
+| Chi Phí/SP | ~12,660 VNĐ |
+
+---
+
+## 🛠️ CÀI ĐẶT MÔI TRƯỜNG
+
 ```bash
-streamlit run app_v5.py
-```
+# Tạo virtual environment
+python3 -m venv venv
 
-Hoặc chạy file batch:
-```bash
-run_app.bat
-```
+# Kích hoạt
+source venv/bin/activate  # Mac/Linux
+# hoặc
+venv\Scripts\activate  # Windows
 
-Sau đó mở trình duyệt vào địa chỉ: http://localhost:8501
-
----
-
-## 📁 Cấu trúc thư mục
-
-```
-AI HỌC/
-├── app_v5.py              # Ứng dụng chính (chạy file này)
-├── pxk_core_v4.py         # Core xử lý + AI học dữ liệu
-├── pdf_extractor.py       # Trích xuất từ PDF
-├── excel_writer.py        # Ghi file Excel
-├── run_app.bat            # File chạy tự động Windows
-├── run_app.ps1            # File chạy PowerShell
-├── requirements.txt       # Danh sách thư viện
-│
-├── 2033-2096/             # Dữ liệu huấn luyện
-│   ├── FILE TRONG 2033-2096.xlsx      (form trống)
-│   ├── FORM_DA_DIEN_PXK 2033-2096.xlsx (form đã điền - để học)
-│   └── pxk/               # Folder chứa PDF
-│
-├── 2144-2172/             # Dữ liệu huấn luyện
-├── 2168-2243/             # Dữ liệu huấn luyện
-└── 2273-2316/             # Dữ liệu huấn luyện
+# Cài đặt thư viện
+pip install pandas openpyxl xlsxwriter streamlit
 ```
 
 ---
 
-## 🎯 Các chế độ xử lý
+## 📝 GHI CHÚ
 
-### 1️⃣ Chế độ "Chỉ trích xuất PDF" (Bước 1 riêng)
-**Dùng khi:** Chỉ cần xem dữ liệu từ file PDF, chưa cần ghép vào form
-
-**Cách dùng:**
-1. Chọn chế độ: 📄 Chỉ bước 1: Trích xuất dữ liệu
-2. Upload file PDF (có thể chọn nhiều file)
-3. Bấm "Bắt đầu xử lý"
-4. Tải file Excel kết quả về
-
-**Kết quả:** File Excel chứa dữ liệu đã trích xuất từ tất cả PDF
+- Dữ liệu được lưu tự động vào file Excel
+- Có thể nhập dữ liệu cho nhiều năm
+- Hỗ trợ cập nhật dữ liệu tháng đã nhập trước đó
 
 ---
 
-### 2️⃣ Chế độ "Trích xuất + Ghép form" (Cả 2 bước)
-**Dùng khi:** Cần ghép số PXK vào form trống
+## 📞 HỖ TRỢ
 
-**Cách dùng:**
-1. Chọn chế độ: 📋 Cả 2 bước: Trích xuất PDF + Ghép vào Form
-2. Upload file PDF (phiếu xuất kho)
-3. Upload file Excel form trống
-4. Bấm "Bắt đầu xử lý"
-5. Tải file form đã điền PXK về
-
-**Kết quả:** File Excel form đã được điền số PXK tự động
-
----
-
-## 🧠 Tính năng AI học từ dữ liệu (core_v4)
-
-App v5 sử dụng **pxk_core_v4** với khả năng:
-- Tự động phát hiện các folder dữ liệu đã điền
-- Học từ các mẫu đã điền để chấm điểm các trường hợp mơ hồ
-- Sử dụng beam search + scoring để chọn PXK tối ưu
-- Cải thiện độ chính xác qua các lần học
-
----
-
-## 🎨 Màu sắc kết quả
-
-| Màu | Ý nghĩa |
-|-----|---------|
-| 🟢 Xanh | ✅ Tự động - 1 PXK duy nhất khớp |
-| 🟡 Vàng | 🔍 Cần kiểm tra - Có nhiều khả năng |
-| 🔴 Đỏ | ❌ Không khớp - Cần điền thủ công |
-
----
-
-## 📝 Lưu ý quan trọng
-
-### Về file PDF:
-- Cần là file Phiếu Xuất Kho định dạng PDF
-- Không bị mật khẩu bảo vệ
-
-### Về file Form:
-- Định dạng Excel (.xlsx)
-- Cột 3: Số hóa đơn (Invoice)
-- Cột 4: Mã hàng
-- Cột 5: Số lượng GR
-- Sheet tên "XUẤT" hoặc "Sheet1"
-
-### Về dữ liệu huấn luyện:
-Core_v4 tự động tìm các folder có:
-- Thư mục `pxk/` chứa file PDF
-- File form trống (tên chứa "không có" / "khong co")
-- File form đã điền (tên chứa "có dữ liệu" / "co du lieu")
-
----
-
-## ❓ Lỗi thường gặp
-
-**Lỗi: ModuleNotFoundError**
-```bash
-pip install streamlit pandas openpyxl pdfplumber PyMuPDF
-```
-
-**Lỗi: Không tìm thấy lệnh streamlit**
-```bash
-python -m streamlit run app_v5.py
-```
-
-**Lỗi: Không đọc được PDF**
-- Kiểm tra file PDF không bị mật khẩu bảo vệ
-- Thử cài thêm: `pip install pdf2image`
-
-**Lỗi: Không tìm thấy dữ liệu huấn luyện**
-- Đảm bảo các folder có định dạng đúng: `XXXX-YYYY`
-- Mỗi folder cần có thư mục `pxk/` chứa PDF
-- File Excel cần có tên phù hợp (xem phần Lưu ý)
+Nếu cần hỗ trợ thêm, vui lòng liên hệ.
