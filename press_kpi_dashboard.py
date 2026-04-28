@@ -488,6 +488,32 @@ def show_time_view(df_sum, period):
     to_idx = data[data['Period'] == to_val].index[0]
     filtered = data.iloc[from_idx:to_idx+1]
     
+    # ===== TÍNH TỔNG THEO RANGE ĐÃ CHỌN =====
+    total_operating_range = filtered['Operating time'].sum()
+    total_loss_range = filtered['Loss time'].sum()
+    total_capacity_range = filtered['Capacity'].sum()
+    total_plan_range = filtered['Plan'].sum()
+    total_defect_range = filtered['Q.ty defect'].sum()
+    actual_run_range = total_operating_range - total_loss_range
+    utilization_range = (actual_run_range/total_operating_range*100) if total_operating_range > 0 else 0
+    loss_rate_range = (total_loss_range/total_operating_range*100) if total_operating_range > 0 else 0
+    avg_uph_range = calculate_uph(total_capacity_range, total_operating_range)
+    
+    # Hiển thị tổng theo range đã chọn
+    st.markdown(f"#### 📊 Tổng hợp từ {from_val} đến {to_val}")
+    cols = st.columns(4)
+    with cols[0]:
+        st.metric("⏰ Operating", f"{total_operating_range:.1f}h", "giờ hoạt động")
+    with cols[1]:
+        st.metric("⚠️ Loss", f"{total_loss_range:.1f}h", f"{loss_rate_range:.1f}%")
+    with cols[2]:
+        st.metric("✅ Actual Run", f"{actual_run_range:.1f}h", f"{utilization_range:.1f}% util")
+    with cols[3]:
+        oee_range = (total_capacity_range/total_plan_range*100) if total_plan_range > 0 else 0
+        st.metric("📈 OEE", f"{oee_range:.1f}%", f"{total_capacity_range:,.0f} pcs")
+    
+    st.markdown("---")
+    
     # Charts - 4 chart trên 1 hàng
     col1, col2, col3, col4 = st.columns(4)
     
