@@ -355,48 +355,7 @@ def main():
         ])
         
         st.markdown("---")
-        st.markdown("### 🔄 Làm mới dữ liệu")
-        if st.button("🔄 Refresh / Clear Cache", type="primary", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-        st.caption("Nhấn khi upload file mới để reload dữ liệu")
-        
-        st.markdown("---")
-        st.markdown("### 📖 Giải thích chỉ số")
-        
-        with st.expander("🔤 Các chỉ số chính", expanded=False):
-            st.markdown("""
-            <div style='font-size:0.85rem;'>
-            <b>📊 Sản lượng & Kế hoạch:</b><br>
-            • <b>Plan</b> = Số lượng kế hoạch sản xuất<br>
-            • <b>Actual/Capacity</b> = Số lượng thực tế sản xuất được<br><br>
-            
-            <b>⚡ Hiệu suất:</b><br>
-            • <b>OEE</b> = Overall Equipment Effectiveness<br>
-            &nbsp;&nbsp;(Tỉ lệ % thiết bị hoạt động hiệu quả)<br>
-            • <b>UPH</b> = Units Per Hour<br>
-            &nbsp;&nbsp;(Sản lượng trung bình trên 1 giờ làm việc)<br><br>
-            
-            <b>⚠️ Chất lượng - Lỗi:</b><br>
-            • <b>NG</b> = Not Good = Hàng lỗi, hàng không đạt<br>
-            • <b>Q.ty defect</b> = Số lượng hàng lỗi<br>
-            • <b>PPM</b> = Parts Per Million<br>
-            &nbsp;&nbsp;(Tỷ lệ hàng lỗi trên 1 triệu sản phẩm)<br>
-            • <b>NG Rate</b> = Tỷ lệ % hàng lỗi / tổng sản lượng<br><br>
-            
-            <b>⏱️ Thởi gian:</b><br>
-            • <b>Loss time</b> = Thởi gian mất mát, dừng máy<br>
-            • <b>Operating time</b> = Thởi gian vận hành thực tế<br><br>
-            
-            <b>📦 Khác:</b><br>
-            • <b>Part Code</b> = Mã sản phẩm<br>
-            • <b>Part Name</b> = Tên sản phẩm<br>
-            • <b>Shift</b> = Ca làm việc (Ngày/Đêm)<br>
-            • <b>Line</b> = Dây chuyền sản xuất<br>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("<div style='font-size:0.75rem;color:#5a6078;margin-top:10px;'>SMC Press KPI Dashboard v1.0</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:0.8rem;color:#8a90a8;'>UPH = Actual / Operating Time</div>", unsafe_allow_html=True)
     
     # Validate and load data
     if isinstance(uploaded_file, str):
@@ -445,8 +404,11 @@ def main():
 def show_overview(df_sum, total_plan, total_capacity, total_defect, total_loss, avg_uph):
     st.markdown("<div class='main-header'>📊 Tổng quan sản xuất</div>", unsafe_allow_html=True)
     
-    # KPI Cards
-    cols = st.columns(6)
+    # Tính tổng Operating time
+    total_operating_time = df_sum['Operating time'].sum()
+    
+    # KPI Cards - 7 cột
+    cols = st.columns(7)
     with cols[0]:
         st.metric("Sản lượng thực tế", f"{total_capacity:,.0f}", "pcs")
     with cols[1]:
@@ -457,8 +419,11 @@ def show_overview(df_sum, total_plan, total_capacity, total_defect, total_loss, 
     with cols[3]:
         st.metric("Tổng lỗi NG", f"{total_defect:,.0f}", f"{total_defect/total_capacity*1e6:.0f} PPM" if total_capacity > 0 else "0 PPM")
     with cols[4]:
-        st.metric("Loss time", f"{total_loss:.1f}", "giờ")
+        st.metric("⏰ Operating", f"{total_operating_time:.1f}", "giờ")
     with cols[5]:
+        loss_pct = (total_loss/total_operating_time*100) if total_operating_time > 0 else 0
+        st.metric("⚠️ Loss Time", f"{total_loss:.1f}h", f"{loss_pct:.1f}%")
+    with cols[6]:
         st.metric("Avg UPH", f"{avg_uph:.2f}", "pcs/hour")
     
     st.markdown("---")
@@ -572,9 +537,11 @@ def show_time_view(df_sum, period):
     
     # Detail table
     st.markdown("### 📋 Chi tiết dữ liệu")
-    display_cols = ['Period', 'Start_Date', 'End_Date', 'Plan', 'Capacity', 'OEE', 'Q.ty defect', 'PPM', 'Loss time', 'UPH']
+    display_cols = ['Period', 'Start_Date', 'End_Date', 'Plan', 'Capacity', 'OEE', 'Q.ty defect', 'PPM', 'Operating time', 'Loss time', 'UPH']
     display_df = filtered[display_cols].copy()
-    display_df.columns = ['Thời gian', 'Từ ngày', 'Đến ngày', 'Kế hoạch', 'Thực tế', 'OEE (%)', 'NG (pcs)', 'PPM', 'Loss (h)', 'UPH']
+    display_df.columns = ['Thời gian', 'Từ ngày', 'Đến ngày', 'Kế hoạch', 'Thực tế', 'OEE (%)', 'NG (pcs)', 'PPM', 'Operating (h)', 'Loss (h)', 'UPH']
+    # Thêm cột % Loss
+    display_df['% Loss'] = (display_df['Loss (h)'] / display_df['Operating (h)'] * 100).round(2)
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 def show_by_code(df_sum, df_loss=None):
@@ -768,7 +735,6 @@ def show_by_code(df_sum, df_loss=None):
     
     # Search and table
     st.markdown("### 📋 Chi tiết toàn bộ Part Code")
-    st.caption("💡 **NG**: Hàng lỗi (pcs) | **PPM**: Tỷ lệ lỗi trên 1 triệu SP | **NG Rate**: Tỷ lệ % hàng lỗi | **OEE**: Hiệu suất thiết bị (%) | **UPH**: Sản lượng/giờ | **Loss**: Thởi gian mất mát (h)")
     search = st.text_input("🔍 Tìm kiếm Part Code hoặc Part Name:", "", key=f"code_search_{period_key}")
     
     if search:
@@ -779,9 +745,11 @@ def show_by_code(df_sum, df_loss=None):
     else:
         filtered = code_data
     
-    display_df = filtered[['Part code', 'Part name', 'Plan', 'Capacity', 'OEE', 'Q.ty defect', 'PPM', 'NG_Rate', 'Loss time', 'UPH']].copy()
-    display_df.columns = ['Part Code', 'Part Name', 'Plan', 'Actual', 'OEE (%)', 'NG', 'PPM', 'NG Rate (%)', 'Loss (h)', 'UPH']
+    display_df = filtered[['Part code', 'Part name', 'Plan', 'Capacity', 'OEE', 'Q.ty defect', 'PPM', 'NG_Rate', 'Operating time', 'Loss time', 'UPH']].copy()
+    display_df.columns = ['Part Code', 'Part Name', 'Plan', 'Actual', 'OEE (%)', 'NG', 'PPM', 'NG Rate (%)', 'Operating (h)', 'Loss (h)', 'UPH']
     display_df['Part Code'] = display_df['Part Code'].apply(ensure_part_code_string)
+    # Thêm cột % Loss
+    display_df['% Loss'] = (display_df['Loss (h)'] / display_df['Operating (h)'] * 100).round(2)
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     
     # Chi tiết Loss Time với Start/End Time cho Part Code được chọn
@@ -851,7 +819,9 @@ def show_by_shift(df_sum):
             st.metric("Sản lượng", f"{d['Capacity']:,.0f}")
             st.metric("Đạt KH", f"{d['OEE']:.2f}%")
             st.metric("Lỗi NG", f"{d['Q.ty defect']:,.0f}")
-            st.metric("Loss time", f"{d['Loss time']:.1f} h")
+            st.metric("⏰ Operating", f"{d['Operating time']:.1f} h")
+            loss_pct_day = (d['Loss time']/d['Operating time']*100) if d['Operating time'] > 0 else 0
+            st.metric("⚠️ Loss time", f"{d['Loss time']:.1f} h", f"{loss_pct_day:.1f}%")
     with cols[1]:
         st.markdown("#### 🌙 Ca Đêm")
         if len(night_data) > 0:
@@ -859,7 +829,9 @@ def show_by_shift(df_sum):
             st.metric("Sản lượng", f"{d['Capacity']:,.0f}")
             st.metric("Đạt KH", f"{d['OEE']:.2f}%")
             st.metric("Lỗi NG", f"{d['Q.ty defect']:,.0f}")
-            st.metric("Loss time", f"{d['Loss time']:.1f} h")
+            st.metric("⏰ Operating", f"{d['Operating time']:.1f} h")
+            loss_pct_night = (d['Loss time']/d['Operating time']*100) if d['Operating time'] > 0 else 0
+            st.metric("⚠️ Loss time", f"{d['Loss time']:.1f} h", f"{loss_pct_night:.1f}%")
     
     st.markdown("---")
     
@@ -931,17 +903,18 @@ def show_by_shift(df_sum):
     
     # Comparison table
     st.markdown("### Bảng so sánh chi tiết")
-    st.caption("💡 **NG**: Hàng lỗi (pcs) | **OEE**: Hiệu suất thiết bị (%) | **UPH**: Sản lượng/giờ | **Loss**: Thởi gian mất mát (h)")
     compare_data = []
     if len(day_data) > 0:
         d = day_data.iloc[0]
-        compare_data.append(['☀️ Ca Ngày', d['Plan'], d['Capacity'], d['OEE'], d['Q.ty defect'], d['Loss time'], d['UPH']])
+        loss_pct_day = (d['Loss time']/d['Operating time']*100) if d['Operating time'] > 0 else 0
+        compare_data.append(['☀️ Ca Ngày', d['Plan'], d['Capacity'], d['OEE'], d['Q.ty defect'], d['Operating time'], d['Loss time'], loss_pct_day, d['UPH']])
     if len(night_data) > 0:
         d = night_data.iloc[0]
-        compare_data.append(['🌙 Ca Đêm', d['Plan'], d['Capacity'], d['OEE'], d['Q.ty defect'], d['Loss time'], d['UPH']])
+        loss_pct_night = (d['Loss time']/d['Operating time']*100) if d['Operating time'] > 0 else 0
+        compare_data.append(['🌙 Ca Đêm', d['Plan'], d['Capacity'], d['OEE'], d['Q.ty defect'], d['Operating time'], d['Loss time'], loss_pct_night, d['UPH']])
     
     if compare_data:
-        compare_df = pd.DataFrame(compare_data, columns=['Ca', 'Kế hoạch', 'Thực tế', 'OEE (%)', 'NG (pcs)', 'Loss (h)', 'UPH'])
+        compare_df = pd.DataFrame(compare_data, columns=['Ca', 'Kế hoạch', 'Thực tế', 'OEE (%)', 'NG (pcs)', 'Operating (h)', 'Loss (h)', '% Loss', 'UPH'])
         st.dataframe(compare_df, use_container_width=True, hide_index=True)
 
 def show_loss_time_view(df_loss, period):
@@ -1060,14 +1033,12 @@ def show_loss_time_view(df_loss, period):
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### 🔍 Chi tiết nguyên nhân")
-        st.caption("💡 Top nguyên nhân gây mất thởi gian sản xuất (theo giờ)")
         if len(loss_reason) > 0:
             loss_reason['Tỉ lệ (%)'] = (loss_reason['Loss time'] / loss_reason['Loss time'].sum() * 100).round(1)
             st.dataframe(loss_reason[['Reason', 'Loss time', 'Tỉ lệ (%)']], use_container_width=True, hide_index=True)
     
     with col2:
         st.markdown("### 📦 Chi tiết Part Code bị ảnh hưởng")
-        st.caption("💡 Top Part Code có thởi gian mất mát cao nhất | **Top_Reason**: Nguyên nhân chính gây loss")
         if len(loss_by_code) > 0:
             loss_by_code['Tỉ lệ (%)'] = (loss_by_code['Loss time'] / loss_by_code['Loss time'].sum() * 100).round(1)
             display_loss_code = loss_by_code[['Part code', 'Part name', 'Loss time', 'Tỉ lệ (%)', 'Top_Reason']].copy()
@@ -1078,7 +1049,6 @@ def show_loss_time_view(df_loss, period):
     # Chi tiết Loss Time với Start/End Time
     st.markdown("---")
     st.markdown("### ⏱️ Chi tiết Loss Time (Top 50 sự cố)")
-    st.caption("💡 Chi tiết các sự cố mất thởi gian | **Start/End time**: Thởi gian bắt đầu/kết thúc | **Dept PIC**: Bộ phận xử lý")
     
     # Format datetime columns
     if len(loss_details) > 0:
