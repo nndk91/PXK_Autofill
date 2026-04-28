@@ -384,31 +384,66 @@ def main():
     
     df_sum, df_loss = process_data(df_sum, df_loss)
     
-    # Summary stats
-    total_plan = df_sum['Plan'].sum()
-    total_capacity = df_sum['Capacity'].sum()
-    total_defect = df_sum['Q.ty defect'].sum()
-    total_loss = df_loss['Loss time'].sum()
-    avg_uph = calculate_uph(total_capacity, df_sum['Operating time'].sum())
+    # Get unique lines for filter
+    unique_lines = sorted(df_sum['Line'].dropna().unique().tolist())
+    
+    # Line filter in sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🏭 Lọc theo Machine/Line")
+    line_options = ["Tất cả"] + unique_lines
+    selected_line = st.sidebar.selectbox("Chọn Line:", line_options, index=0)
+    
+    # Filter data by line
+    if selected_line != "Tất cả":
+        df_sum_filtered = df_sum[df_sum['Line'] == selected_line].copy()
+        df_loss_filtered = df_loss[df_loss['Line'] == selected_line].copy()
+    else:
+        df_sum_filtered = df_sum.copy()
+        df_loss_filtered = df_loss.copy()
+    
+    # Summary stats (filtered)
+    total_plan = df_sum_filtered['Plan'].sum()
+    total_capacity = df_sum_filtered['Capacity'].sum()
+    total_defect = df_sum_filtered['Q.ty defect'].sum()
+    total_loss = df_loss_filtered['Loss time'].sum()
+    total_operating = df_sum_filtered['Operating time'].sum()
+    avg_uph = calculate_uph(total_capacity, total_operating)
     
     # Display page content
     if page == "🏠 Overview":
-        show_overview(df_sum, total_plan, total_capacity, total_defect, total_loss, avg_uph)
+        show_overview(df_sum_filtered, total_plan, total_capacity, total_defect, total_loss, total_operating, avg_uph, selected_line)
     elif page == "📦 By Code":
-        show_by_code(df_sum, df_loss)
+        show_by_code(df_sum_filtered, df_loss_filtered, selected_line)
     elif page == "🕐 By Shift":
-        show_by_shift(df_sum)
+        show_by_shift(df_sum_filtered, selected_line)
     else:
-        show_loss_time(df_sum, df_loss)
+        show_loss_time(df_sum_filtered, df_loss_filtered, selected_line)
 
-def show_overview(df_sum, total_plan, total_capacity, total_defect, total_loss, avg_uph):
-    st.markdown("<div class='main-header'>📊 Tổng quan sản xuất</div>", unsafe_allow_html=True)
+def show_overview(df_sum, total_plan, total_capacity, total_defect, total_loss, total_operating, avg_uph, selected_line="Tất cả"):
+    # Header với thông tin line đang chọn
+    line_info = f" - {selected_line}" if selected_line != "Tất cả" else ""
+    st.markdown(f"<div class='main-header'>📊 Tổng quan sản xuất{line_info}</div>", unsafe_allow_html=True)
     
-    # Tính tổng Operating time
-    total_operating_time = df_sum['Operating time'].sum()
+    # ===== PHẦN TỔNG OPERATING VÀ LOSS HOURS =====
+    st.markdown("### ⏰ Tổng thời gian hoạt động")
     
-    # KPI Cards - 7 cột
-    cols = st.columns(7)
+    cols = st.columns(4)
+    with cols[0]:
+        st.metric("⏰ Operating Hours", f"{total_operating:.1f}h", "Tổng thời gian hoạt động")
+    with cols[1]:
+        st.metric("⚠️ Loss Hours", f"{total_loss:.1f}h", "Tổng thời gian mất mát")
+    with cols[2]:
+        actual_run = total_operating - total_loss
+        st.metric("✅ Actual Run Time", f"{actual_run:.1f}h", "Thời gian chạy thực tế")
+    with cols[3]:
+        utilization = (actual_run/total_operating*100) if total_operating > 0 else 0
+        st.metric("📈 Utilization", f"{utilization:.1f}%", "Hiệu suất sử dụng thời gian")
+    
+    st.markdown("---")
+    
+    # KPI Cards - Sản xuất
+    st.markdown("### 📊 Chỉ số sản xuất")
+    cols = st.columns(6)
     with cols[0]:
         st.metric("Sản lượng thực tế", f"{total_capacity:,.0f}", "pcs")
     with cols[1]:
@@ -419,11 +454,9 @@ def show_overview(df_sum, total_plan, total_capacity, total_defect, total_loss, 
     with cols[3]:
         st.metric("Tổng lỗi NG", f"{total_defect:,.0f}", f"{total_defect/total_capacity*1e6:.0f} PPM" if total_capacity > 0 else "0 PPM")
     with cols[4]:
-        st.metric("⏰ Operating", f"{total_operating_time:.1f}", "giờ")
+        loss_pct = (total_loss/total_operating*100) if total_operating > 0 else 0
+        st.metric("⚠️ Loss Rate", f"{loss_pct:.1f}%", "Tỷ lệ mất mát")
     with cols[5]:
-        loss_pct = (total_loss/total_operating_time*100) if total_operating_time > 0 else 0
-        st.metric("⚠️ Loss Time", f"{total_loss:.1f}h", f"{loss_pct:.1f}%")
-    with cols[6]:
         st.metric("Avg UPH", f"{avg_uph:.2f}", "pcs/hour")
     
     st.markdown("---")
@@ -519,11 +552,40 @@ def show_time_view(df_sum, period):
         st.plotly_chart(fig, use_container_width=True, key=f"{period}_line_chart")
     
     with col4:
-        # Loss time by period
+        # Operating vs Loss time by period - Stacked bar
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=filtered['Period'], y=filtered['Loss time'], marker_color='#f05c5c', name='Loss'))
+        fig.add_trace(go.Bar(x=filtered['Period'], y=filtered['Operating time'], 
+                            marker_color='#3b8eea', name='Operating'))
+        fig.add_trace(go.Bar(x=filtered['Period'], y=filtered['Loss time'], 
+                            marker_color='#f05c5c', name='Loss'))
         fig.update_layout(
-            title="⏱️ Loss Time",
+            title="⏰ Operating vs Loss",
+            barmode='group',
+            plot_bgcolor='#141720',
+            paper_bgcolor='#0d0f14',
+            font_color='#e8eaf0',
+            xaxis_gridcolor='rgba(255,255,255,0.1)',
+            yaxis_gridcolor='rgba(255,255,255,0.1)',
+            height=250,
+            margin=dict(l=10, r=10, t=30, b=10),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=8))
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"{period}_operating_loss_chart")
+    
+    # Chart hàng 2 - Loss Rate % và Operating time trend
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Loss Rate % chart
+        fig = go.Figure()
+        loss_rate = (filtered['Loss time'] / filtered['Operating time'] * 100).round(2)
+        fig.add_trace(go.Scatter(x=filtered['Period'], y=loss_rate, 
+                                mode='lines+markers',
+                                marker_color='#f05c5c',
+                                name='Loss Rate %'))
+        fig.update_layout(
+            title="📈 Loss Rate Trend (%)",
             plot_bgcolor='#141720',
             paper_bgcolor='#0d0f14',
             font_color='#e8eaf0',
@@ -533,7 +595,28 @@ def show_time_view(df_sum, period):
             margin=dict(l=10, r=10, t=30, b=10),
             showlegend=False
         )
-        st.plotly_chart(fig, use_container_width=True, key=f"{period}_loss_chart")
+        st.plotly_chart(fig, use_container_width=True, key=f"{period}_loss_rate_chart")
+    
+    with col2:
+        # Utilization % chart
+        fig = go.Figure()
+        utilization = ((filtered['Operating time'] - filtered['Loss time']) / filtered['Operating time'] * 100).round(2)
+        fig.add_trace(go.Scatter(x=filtered['Period'], y=utilization, 
+                                mode='lines+markers',
+                                marker_color='#2dd4a0',
+                                name='Utilization %'))
+        fig.update_layout(
+            title="✅ Utilization Trend (%)",
+            plot_bgcolor='#141720',
+            paper_bgcolor='#0d0f14',
+            font_color='#e8eaf0',
+            xaxis_gridcolor='rgba(255,255,255,0.1)',
+            yaxis_gridcolor='rgba(255,255,255,0.1)',
+            height=250,
+            margin=dict(l=10, r=10, t=30, b=10),
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"{period}_utilization_chart")
     
     # Detail table
     st.markdown("### 📋 Chi tiết dữ liệu")
@@ -544,8 +627,10 @@ def show_time_view(df_sum, period):
     display_df['% Loss'] = (display_df['Loss (h)'] / display_df['Operating (h)'] * 100).round(2)
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-def show_by_code(df_sum, df_loss=None):
-    st.markdown("<div class='main-header'>📦 Phân tích theo Part Code</div>", unsafe_allow_html=True)
+def show_by_code(df_sum, df_loss=None, selected_line="Tất cả"):
+    # Header với thông tin line đang chọn
+    line_info = f" - {selected_line}" if selected_line != "Tất cả" else ""
+    st.markdown(f"<div class='main-header'>📦 Phân tích theo Part Code{line_info}</div>", unsafe_allow_html=True)
     
     # Time period selection
     period = st.radio("Chọn kỳ:", ["Theo tháng", "Theo tuần", "Theo ngày"], horizontal=True)
@@ -768,8 +853,10 @@ def show_by_code(df_sum, df_loss=None):
             else:
                 st.info("Không có dữ liệu Loss Time cho Part Code này")
 
-def show_by_shift(df_sum):
-    st.markdown("<div class='main-header'>🕐 Phân tích theo ca</div>", unsafe_allow_html=True)
+def show_by_shift(df_sum, selected_line="Tất cả"):
+    # Header với thông tin line đang chọn
+    line_info = f" - {selected_line}" if selected_line != "Tất cả" else ""
+    st.markdown(f"<div class='main-header'>🕐 Phân tích theo ca{line_info}</div>", unsafe_allow_html=True)
     
     # Time period selection
     period = st.radio("Chọn kỳ:", ["Theo tháng", "Theo tuần", "Theo ngày"], horizontal=True)
@@ -917,7 +1004,7 @@ def show_by_shift(df_sum):
         compare_df = pd.DataFrame(compare_data, columns=['Ca', 'Kế hoạch', 'Thực tế', 'OEE (%)', 'NG (pcs)', 'Operating (h)', 'Loss (h)', '% Loss', 'UPH'])
         st.dataframe(compare_df, use_container_width=True, hide_index=True)
 
-def show_loss_time_view(df_loss, period):
+def show_loss_time_view(df_sum, df_loss, period):
     """Show loss time view with period filtering"""
     # Get unique periods
     if period == 'monthly':
@@ -942,25 +1029,35 @@ def show_loss_time_view(df_loss, period):
     loss_reason, loss_dept, loss_type, loss_by_code, loss_plan_type, loss_details, total_loss, loss_by_machine, filtered_loss = \
         get_loss_data(df_loss, period, from_period, to_period)
     
-    # KPI Cards - Phân loại theo kế hoạch
+    # Tính total operating time trong khoảng thởi gian đã chọn
+    if period == 'monthly':
+        period_operating = df_sum[(df_sum['YearMonth'] >= from_period) & (df_sum['YearMonth'] <= to_period)]['Operating time'].sum()
+    elif period == 'weekly':
+        period_operating = df_sum[(df_sum['YearWeek'] >= from_period) & (df_sum['YearWeek'] <= to_period)]['Operating time'].sum()
+    else:
+        period_operating = df_sum[(df_sum['Date_str'] >= from_period) & (df_sum['Date_str'] <= to_period)]['Operating time'].sum()
+    
+    # KPI Cards - Phân loại theo kế hoạch + Operating time
     cols = st.columns(5)
     with cols[0]:
-        st.metric("📊 Tổng loss time", f"{total_loss:.1f}", "giờ")
+        st.metric("⏰ Operating", f"{period_operating:.1f}h", "giờ hoạt động")
+    with cols[1]:
+        loss_pct = (total_loss/period_operating*100) if period_operating > 0 else 0
+        st.metric("📊 Loss time", f"{total_loss:.1f}h", f"{loss_pct:.1f}%")
     
     # Phân loại Có kế hoạch vs Không kế hoạch
     planned_loss = loss_plan_type[loss_plan_type['Loss type'] == 'Có kế hoạch']['Loss time'].sum() if len(loss_plan_type) > 0 else 0
     unplanned_loss = loss_plan_type[loss_plan_type['Loss type'] == 'Không kế hoạch']['Loss time'].sum() if len(loss_plan_type) > 0 else 0
     
-    with cols[1]:
-        st.metric("📋 Có kế hoạch", f"{planned_loss:.1f}h", f"{planned_loss/total_loss*100:.1f}%" if total_loss > 0 else "0%")
     with cols[2]:
-        st.metric("⚠️ Không kế hoạch", f"{unplanned_loss:.1f}h", f"{unplanned_loss/total_loss*100:.1f}%" if total_loss > 0 else "0%")
+        st.metric("📋 Có kế hoạch", f"{planned_loss:.1f}h", f"{planned_loss/total_loss*100:.1f}%" if total_loss > 0 else "0%")
     with cols[3]:
-        if len(loss_reason) > 0:
-            st.metric("🔴 Nguyên nhân #1", loss_reason.iloc[0]['Reason'], f"{loss_reason.iloc[0]['Loss time']:.1f} giờ")
-    with cols[4]:
-        if len(loss_dept) > 0:
-            st.metric("🏭 Bộ phận #1", loss_dept.iloc[0]['Dept PIC'], f"{loss_dept.iloc[0]['Loss time']:.1f} giờ")
+        st.metric("⚠️ Không kế hoạch", f"{unplanned_loss:.1f}h", f"{unplanned_loss/total_loss*100:.1f}%" if total_loss > 0 else "0%")
+    # Thông tin thêm sau 5 cột chính
+    if len(loss_reason) > 0:
+        st.markdown(f"**Top nguyên nhân:** {loss_reason.iloc[0]['Reason']} ({loss_reason.iloc[0]['Loss time']:.1f}h)")
+    if len(loss_dept) > 0:
+        st.markdown(f"**Top bộ phận:** {loss_dept.iloc[0]['Dept PIC']} ({loss_dept.iloc[0]['Loss time']:.1f}h)")
     
     st.markdown("---")
     
@@ -1060,18 +1157,39 @@ def show_loss_time_view(df_loss, period):
     else:
         st.info("Không có dữ liệu chi tiết")
 
-def show_loss_time(df_sum, df_loss):
-    st.markdown("<div class='main-header'>⚠️ Phân tích Loss Time</div>", unsafe_allow_html=True)
+def show_loss_time(df_sum, df_loss, selected_line="Tất cả"):
+    # Header với thông tin line đang chọn
+    line_info = f" - {selected_line}" if selected_line != "Tất cả" else ""
+    st.markdown(f"<div class='main-header'>⚠️ Phân tích Loss Time{line_info}</div>", unsafe_allow_html=True)
+    
+    # ===== PHẦN TỔNG OPERATING VÀ LOSS HOURS =====
+    total_operating = df_sum['Operating time'].sum()
+    total_loss = df_loss['Loss time'].sum()
+    
+    st.markdown("### ⏰ Tổng thời gian hoạt động & Loss")
+    cols = st.columns(4)
+    with cols[0]:
+        st.metric("⏰ Operating Hours", f"{total_operating:.1f}h", "Tổng thời gian hoạt động")
+    with cols[1]:
+        st.metric("⚠️ Loss Hours", f"{total_loss:.1f}h", "Tổng thời gian mất mát")
+    with cols[2]:
+        actual_run = total_operating - total_loss
+        st.metric("✅ Actual Run Time", f"{actual_run:.1f}h", "Thời gian chạy thực tế")
+    with cols[3]:
+        utilization = (actual_run/total_operating*100) if total_operating > 0 else 0
+        st.metric("📈 Utilization", f"{utilization:.1f}%", "Hiệu suất sử dụng thời gian")
+    
+    st.markdown("---")
     
     # Time period selection tabs
     tab_monthly, tab_weekly, tab_daily = st.tabs(["📅 Theo tháng", "📆 Theo tuần", "📋 Theo ngày"])
     
     with tab_monthly:
-        show_loss_time_view(df_loss, 'monthly')
+        show_loss_time_view(df_sum, df_loss, 'monthly')
     with tab_weekly:
-        show_loss_time_view(df_loss, 'weekly')
+        show_loss_time_view(df_sum, df_loss, 'weekly')
     with tab_daily:
-        show_loss_time_view(df_loss, 'daily')
+        show_loss_time_view(df_sum, df_loss, 'daily')
 
 if __name__ == "__main__":
     main()
